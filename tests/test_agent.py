@@ -26,3 +26,9 @@ def test_scan_files():
 def test_scan_integrity():
     alerts = scan_file_integrity()
     assert isinstance(alerts, list)
+
+from agent.monitor_network import scan_network
+
+def test_scan_network():
+    alerts = scan_network()
+    assert isinstance(alerts, list)
