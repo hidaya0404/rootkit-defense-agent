@@ -1,0 +1,22 @@
+name: Agent Pipeline
+
+on:
+  push:
+    branches: [ feature/agent-surveillance, dev ]
+
+jobs:
+  test-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Installer dependances
+        run: pip install psutil watchdog requests pytest
+
+      - name: Lancer les tests
+        run: python3 -m pytest tests/ -v
