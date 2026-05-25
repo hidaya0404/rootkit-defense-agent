@@ -1,0 +1,19 @@
+[Unit]
+Description=Rootkit Defense Agent
+Documentation=https://github.com/hidaya0404/rootkit-defense-agent
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rootkit-defense-agent
+Environment=PYTHONPATH=/opt/rootkit-defense-agent/libs
+ExecStart=/usr/bin/python3 /opt/rootkit-defense-agent/agent/main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
