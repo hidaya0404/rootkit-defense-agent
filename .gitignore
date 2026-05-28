@@ -25,3 +25,7 @@ shared/file_baseline.json
 # OS
 .DS_Store
 Thumbs.db
+
+sandbox/sandbox_config.py
+sandbox/results/*
+!sandbox/results/.gitkeep
