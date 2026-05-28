@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QuarantineRequest",
+  "type": "object",
+  "required": ["artifact_path", "detection_reason"],
+  "properties": {
+    "alert_id": {
+      "type": ["string", "null"],
+      "examples": ["ALT-2026-000001"]
+    },
+    "artifact_path": {
+      "type": "string",
+      "examples": ["/tmp/suspicious.sh"]
+    },
+    "detection_reason": {
+      "type": "string",
+      "examples": ["Executable file created in suspicious directory"]
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+      "default": "MEDIUM"
+    },
+    "detected_at": {
+      "type": ["string", "null"],
+      "examples": ["2026-05-28T18:30:10Z"]
+    },
+    "source_module": {
+      "type": "string",
+      "default": "detection-engine"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
+

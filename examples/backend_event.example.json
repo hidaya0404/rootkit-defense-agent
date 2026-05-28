@@ -1,0 +1,9 @@
+{
+  "alert_id": "ALT-2026-000001",
+  "artifact_path": "/tmp/suspicious.sh",
+  "detection_reason": "Executable file created in suspicious directory",
+  "risk_level": "HIGH",
+  "source_module": "agent-file-monitor",
+  "tags": ["file-monitor", "persistence-check"]
+}
+

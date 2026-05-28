@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QuarantineRecord",
+  "type": "object",
+  "required": [
+    "alert_id",
+    "artifact_name",
+    "original_path",
+    "evidence_dir",
+    "status",
+    "integrity_verified",
+    "ready_for_sandbox"
+  ],
+  "properties": {
+    "alert_id": {
+      "type": "string"
+    },
+    "artifact_name": {
+      "type": "string"
+    },
+    "original_path": {
+      "type": "string"
+    },
+    "evidence_dir": {
+      "type": "string"
+    },
+    "artifact_path": {
+      "type": ["string", "null"]
+    },
+    "sha256": {
+      "type": ["string", "null"]
+    },
+    "rootkit_category": {
+      "type": ["string", "null"]
+    },
+    "suspected_techniques": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    },
+    "status": {
+      "type": "string"
+    },
+    "integrity_verified": {
+      "type": "boolean"
+    },
+    "ready_for_sandbox": {
+      "type": "boolean"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

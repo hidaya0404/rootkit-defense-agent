@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rootkit-defense-agent"
+version = "1.0.0"
+description = "Linux rootkit defense agent with evidence quarantine manager"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Rootkit Defense Agent Team" }
+]
+dependencies = [
+  "psutil>=5.9"
+]
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29"
+]
+test = [
+  "pytest>=8"
+]
+
+[project.scripts]
+evidence-quarantine = "evidence_quarantine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent*", "shared*", "evidence_quarantine*"]
