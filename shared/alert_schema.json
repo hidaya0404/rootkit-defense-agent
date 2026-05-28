@@ -1,0 +1,10 @@
+{
+  "alert_id": "uuid-string",
+  "timestamp": "2026-05-24T10:00:00Z",
+  "source_module": "process_monitor|kernel_monitor|file_monitor|network_monitor",
+  "severity": "LOW|MEDIUM|HIGH|CRITICAL",
+  "type": "HIDDEN_PROCESS|UNKNOWN_KERNEL_MODULE|SENSITIVE_FILE_MODIFIED|EXECUTABLE_IN_SUSPICIOUS_DIR|HIDDEN_NETWORK_CONNECTION",
+  "description": "Description de l alerte",
+  "details": {},
+  "status": "NEW"
+}
