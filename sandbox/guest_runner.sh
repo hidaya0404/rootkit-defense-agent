@@ -23,7 +23,7 @@ find /tmp -type f -printf "%p %s %TY-%Tm-%Td %TH:%TM:%TS\n" > "$RESULT_DIR/files
 echo "[+] Exécution contrôlée avec timeout"
 chmod +x "$ARTIFACT_PATH"
 
-timeout 20s strace -f -o "$RESULT_DIR/strace.log" "$ARTIFACT_PATH" \
+timeout 8s strace -f -o "$RESULT_DIR/strace.log" "$ARTIFACT_PATH" > "$RESULT_DIR/stdout.log" 2> "$RESULT_DIR/stderr.log"\
   > "$RESULT_DIR/stdout.log" \
   2> "$RESULT_DIR/stderr.log"
 
