@@ -168,7 +168,7 @@ def analyze_artifact(artifact_id: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found on server")
 
-    analysis_result = analyze_file(file_path)
+    analysis_result = analyze_file(file_path, artifact_id=artifact_id, alert_id=artifact.get("alert_id"))
     report_path = generate_html_report(artifact, analysis_result)
 
     reports = load_json(REPORTS_FILE)
@@ -177,7 +177,8 @@ def analyze_artifact(artifact_id: str):
         "report_id": str(uuid.uuid4()),
         "artifact_id": artifact_id,
         "alert_id": artifact["alert_id"],
-        "report_path": report_path,
+        "report_path": report_path.get("html_report") if isinstance(report_path, dict) else report_path,
+        "pdf_report_path": report_path.get("pdf_report") if isinstance(report_path, dict) else None,
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "risk_score": analysis_result.get("risk_score"),
         "risk_level": analysis_result.get("risk_level")
