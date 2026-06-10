@@ -199,8 +199,8 @@ def resolve_artifact_path(local_artifact_path=None, artifact_info=None):
     """
     Priorité :
     1. chemin local donné manuellement
-    2. quarantine_path si accessible localement
-    3. download_url via backend
+    2. download_url via backend M4 pour l'intégration réelle
+    3. quarantine_path seulement comme fallback/local test
     4. artefact de test local
     """
     if local_artifact_path:
@@ -210,6 +210,11 @@ def resolve_artifact_path(local_artifact_path=None, artifact_info=None):
         return path
 
     if artifact_info:
+        # Intégration réelle : utiliser download_url en priorité
+        if artifact_info.get("download_url"):
+            return download_artifact_from_backend(artifact_info)
+
+        # Fallback local : utile seulement si M2 et M3 sont sur la même machine
         quarantine_path = artifact_info.get("quarantine_path")
 
         if quarantine_path:
@@ -219,9 +224,6 @@ def resolve_artifact_path(local_artifact_path=None, artifact_info=None):
                 print(f"[+] Artefact recupere depuis quarantine_path : {qpath}")
                 return qpath.resolve()
 
-        if artifact_info.get("download_url"):
-            return download_artifact_from_backend(artifact_info)
-
     default_path = Path("sandbox/sample_artifacts/benign_suspicious.sh").resolve()
 
     if not default_path.exists():
@@ -229,7 +231,6 @@ def resolve_artifact_path(local_artifact_path=None, artifact_info=None):
 
     print("[i] Aucun artefact M2 fourni, utilisation de l’artefact de test local.")
     return default_path
-
 
 def verify_artifact_hash(local_artifact_path, artifact_info, calculated_sha256):
     """
@@ -461,7 +462,7 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
         )
 
     try:
-        restore_snapshot()
+        # restore_snapshot()
         start_vm()
         prepare_guest()
 
@@ -488,12 +489,25 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
         guest_copy_from(f"{REMOTE_WORKDIR}/results", str(local_result_path))
 
         behavior_summary = build_behavior_summary(local_result_path)
+        
+        exit_code = behavior_summary["exit_code"]
+
+        if exit_code == 0:
+            sandbox_status = "COMPLETED"
+            error_message = None
+        elif exit_code == 124:
+            sandbox_status = "TIMEOUT"
+            error_message = "Analyse arretee par timeout"
+        else:
+            sandbox_status = "FAILED"
+            error_message = f"Analyse terminee avec exit_code={exit_code}"
+
 
         result_json = {
             "analysis_id": analysis_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
 
-            # Champs venant de M2 si disponibles
+            # Champs venant de M2/M4
             "artifact_id": artifact_info.get("artifact_id") if artifact_info else None,
             "alert_id": artifact_info.get("alert_id") if artifact_info else None,
             "risk_level": artifact_info.get("risk_level") if artifact_info else None,
@@ -505,14 +519,24 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
             "artifact_md5": artifact_info.get("md5") if artifact_info else None,
             "artifact_sha1": artifact_info.get("sha1") if artifact_info else None,
             "quarantine_path": artifact_info.get("quarantine_path") if artifact_info else None,
+            "download_url": artifact_info.get("download_url") if artifact_info else None,
             "metadata_path": artifact_info.get("metadata_path") if artifact_info else None,
             "manifest_path": artifact_info.get("manifest_path") if artifact_info else None,
 
-            # Informations sandbox
+            # Statut global de l'analyse sandbox
+            "status": "DONE",
+            "sandbox_status": sandbox_status,
+            "error_message":  error_message,
+
+            # Informations VM / snapshot
             "sandbox_vm": VM_NAME,
             "snapshot_used": SNAPSHOT_NAME,
-            "status": "DONE",
-            "sandbox_status": "COMPLETED",
+
+            # Alias professionnels demandés par M2
+            "vm_name": VM_NAME,
+            "snapshot_name": SNAPSHOT_NAME,
+            "analysis_started_at": behavior_summary["started_at"],
+            "analysis_finished_at": behavior_summary["finished_at"],
 
             # Logs générés
             "behavior_logs": {
@@ -530,7 +554,13 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
                 "timestamp_end": "timestamp_end.txt",
             },
 
-            # Format simple demandé par M2/M4
+            # Chemins des logs
+            "logs_path": str(local_result_path),
+            "stdout_path": str(get_result_file(local_result_path, "stdout.log")),
+            "stderr_path": str(get_result_file(local_result_path, "stderr.log")),
+            "strace_path": str(get_result_file(local_result_path, "strace.log")),
+
+            # Résultats comportementaux simples
             "processes": behavior_summary["processes"],
             "files_created": behavior_summary["files_created"],
             "files_modified": behavior_summary["files_modified"],
@@ -543,10 +573,18 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
             "started_at": behavior_summary["started_at"],
             "finished_at": behavior_summary["finished_at"],
 
+            # Alias professionnels demandés par M2/M4
+            "observed_processes": behavior_summary["processes"],
+            "file_events": {
+                "created": behavior_summary["files_created"],
+                "modified": behavior_summary["files_modified"],
+            },
+            "network_events": behavior_summary["network_connections"],
+
             # Résumé lisible
             "behavior_summary": behavior_summary,
 
-            # Chemin local
+            # Chemin local du dossier d'analyse
             "local_result_path": str(local_result_path),
         }
 
@@ -572,7 +610,7 @@ def send_result_to_backend(result):
     print(f"[+] Envoi resultat vers backend : {url}")
 
     try:
-        response = requests.post(url, json=result, timeout=10)
+        response = requests.post(url, json=result, timeout=3)
         print(f"[+] Status backend : {response.status_code}")
         print(response.text)
     except Exception as e:
