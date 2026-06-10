@@ -1,9 +1,11 @@
 fastapi
 uvicorn[standard]
-sqlmodel
 pydantic
-jinja2
 python-multipart
+jinja2
 reportlab
 yara-python
 pytest
+psutil
+requests
+python-magic

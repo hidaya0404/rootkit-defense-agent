@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rootkit Defense Agent - Quarantaine</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">RD</span>
+          <div>
+            <strong>Rootkit Defense</strong>
+            <span>Evidence Console</span>
+          </div>
+        </div>
+        <nav class="nav-list" aria-label="Navigation principale">
+          <button class="nav-item active" type="button">Alertes</button>
+          <button class="nav-item" type="button">Quarantaine</button>
+          <button class="nav-item" type="button">IOC</button>
+          <button class="nav-item" type="button">Rapports</button>
+        </nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Quarantaine</h1>
+            <p>Artefacts isoles, preuves conservees et handoff sandbox.</p>
+          </div>
+          <div class="health-pill">
+            <span class="dot"></span>
+            Agent actif
+          </div>
+        </header>
+
+        <section class="metrics" aria-label="Indicateurs">
+          <article class="metric">
+            <span>Alertes</span>
+            <strong id="metric-alerts">0</strong>
+          </article>
+          <article class="metric">
+            <span>Pretes sandbox</span>
+            <strong id="metric-ready">0</strong>
+          </article>
+          <article class="metric">
+            <span>Integrite validee</span>
+            <strong id="metric-integrity">0</strong>
+          </article>
+          <article class="metric">
+            <span>Risque eleve</span>
+            <strong id="metric-high">0</strong>
+          </article>
+        </section>
+
+        <section class="toolbar" aria-label="Filtres">
+          <div class="segmented" role="tablist">
+            <button class="segment active" type="button" data-filter="ALL">Tous</button>
+            <button class="segment" type="button" data-filter="READY_FOR_ANALYSIS">Ready</button>
+            <button class="segment" type="button" data-filter="REJECTED">Rejetes</button>
+          </div>
+          <label class="search-box">
+            <span>Rechercher</span>
+            <input id="search" type="search" placeholder="Alert ID, hash, chemin">
+          </label>
+        </section>
+
+        <section class="content-grid">
+          <div class="table-panel">
+            <table>
+              <thead>
+                <tr>
+                  <th>Alerte</th>
+                  <th>Artefact</th>
+                  <th>Risque</th>
+                  <th>Statut</th>
+                  <th>SHA256</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="records"></tbody>
+            </table>
+          </div>
+
+          <aside class="detail-panel" id="details" aria-live="polite">
+            <div class="empty-state">
+              <strong>Selectionner une alerte</strong>
+              <span>Les details forensic seront affiches ici.</span>
+            </div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
+

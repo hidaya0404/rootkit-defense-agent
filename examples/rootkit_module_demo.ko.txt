@@ -1,0 +1,3 @@
+BENIGN ROOTKIT DEFENSE DEMO ARTIFACT
+This is not a real Linux kernel module and must never be loaded.
+It only simulates a .ko artifact name for quarantine testing.

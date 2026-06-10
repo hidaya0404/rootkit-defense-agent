@@ -4,12 +4,21 @@ __pycache__/
 *.pyo
 .env
 venv/
+.venv/
 
 # Logs
 logs/*.log
 logs/*.jsonl
 
-# Baselines (générées automatiquement)
+# Runtime/demo outputs
+runtime/
+attacker-work/
+attack-payload/
+rootkit-defense-storage/
+victim-storage/
+quarantine_zone/
+
+# Baselines generated automatically
 shared/kernel_modules_baseline.txt
 shared/file_baseline.json
 

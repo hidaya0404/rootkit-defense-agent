@@ -1,0 +1,10 @@
+{
+  "storage_root": "/var/lib/rootkit-defense",
+  "quarantine_dir": "/var/lib/rootkit-defense/quarantine",
+  "audit_dir": "/var/lib/rootkit-defense/audit",
+  "allow_system_paths": false,
+  "max_artifact_size_bytes": 104857600,
+  "secure_permissions": true,
+  "actor": "evidence-quarantine-manager"
+}
+

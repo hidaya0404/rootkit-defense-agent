@@ -1,5 +1,14 @@
 import sys
 import os
+import importlib.util
+import unittest
+
+if os.name != "posix":
+    raise unittest.SkipTest("Agent monitors require Linux /proc")
+
+if importlib.util.find_spec("psutil") is None:
+    raise unittest.SkipTest("psutil is required for agent monitor tests")
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.monitor_processes import scan_processes, build_alert
 from agent.monitor_kernel import scan_kernel_modules
