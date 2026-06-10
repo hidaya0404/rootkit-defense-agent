@@ -29,6 +29,7 @@ class QuarantineManagerTest(unittest.TestCase):
             )
 
             self.assertTrue(result.success, result.errors)
+            self.assertEqual(result.artifact_id, "ART-ALT-TEST-0001")
             self.assertEqual(result.status, QuarantineStatus.READY_FOR_ANALYSIS)
             self.assertTrue(result.artifact_path.exists())
             self.assertTrue(result.metadata_path.exists())
@@ -42,6 +43,7 @@ class QuarantineManagerTest(unittest.TestCase):
             audit_log = result.audit_log_path.read_text(encoding="utf-8")
 
             self.assertEqual(metadata["alert_id"], "ALT-TEST-0001")
+            self.assertEqual(manifest["artifact_id"], "ART-ALT-TEST-0001")
             self.assertEqual(metadata["status"], "READY_FOR_ANALYSIS")
             self.assertTrue(metadata["integrity_verified"])
             self.assertEqual(metadata["rootkit_profile"]["category"], "unknown_rootkit_artifact")
@@ -91,6 +93,11 @@ class QuarantineManagerTest(unittest.TestCase):
             records = manager.list_evidence()
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["alert_id"], "ALT-INDEX-0001")
+            self.assertEqual(records[0]["artifact_id"], "ART-ALT-INDEX-0001")
+            self.assertEqual(records[0]["filename"], "sample.txt")
+            self.assertEqual(records[0]["quarantine_path"], records[0]["artifact_path"])
+            self.assertIn("md5", records[0])
+            self.assertIn("sha1", records[0])
             self.assertEqual(records[0]["status"], "READY_FOR_ANALYSIS")
             self.assertTrue(records[0]["ready_for_sandbox"])
 

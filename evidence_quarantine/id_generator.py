@@ -20,3 +20,6 @@ def sanitize_alert_id(alert_id: str) -> str:
     cleaned = cleaned.strip(".-")
     return cleaned or generate_alert_id()
 
+
+def artifact_id_for_alert(alert_id: str) -> str:
+    return f"ART-{sanitize_alert_id(alert_id)}"
