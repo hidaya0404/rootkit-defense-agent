@@ -47,3 +47,7 @@ test_artifact.txt
 cloudflare_artifact.txt
 cloudflared-linux-amd64.deb
 
+
+sandbox/test_metadata.json
+
+sandbox/test_metadata.json
