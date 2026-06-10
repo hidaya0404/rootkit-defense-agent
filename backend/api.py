@@ -1,3 +1,4 @@
+from fastapi.responses import FileResponse
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -379,3 +380,40 @@ def get_sandbox_result_by_artifact(artifact_id: str):
         "count": len(artifact_results),
         "results": artifact_results
     }
+
+
+# ============================================================
+# Artifact download endpoint for M3 Sandbox
+# ============================================================
+
+@app.get("/api/quarantine/{artifact_id}/download")
+def download_quarantined_artifact(artifact_id: str):
+    artifacts = load_json(QUARANTINE_FILE)
+
+    artifact = next(
+        (a for a in artifacts if a.get("artifact_id") == artifact_id),
+        None
+    )
+
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    file_path = artifact.get("stored_path") or artifact.get("quarantine_path")
+
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Artifact file not found on backend"
+        )
+
+    filename = (
+        artifact.get("original_filename")
+        or artifact.get("filename")
+        or "artifact.bin"
+    )
+
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )
