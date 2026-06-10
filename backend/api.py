@@ -236,3 +236,146 @@ def get_remediation_plan(artifact_id: str):
         "message": "Remediation plan generated",
         "remediation": remediation_plan
     }
+
+
+# ============================================================
+# M4 Integration with M2 Quarantine Manager
+# ============================================================
+
+class QuarantineManifest(BaseModel):
+    artifact_id: str
+    alert_id: str
+    filename: str
+    sha256: str
+    md5: Optional[str] = None
+    sha1: Optional[str] = None
+    original_path: Optional[str] = None
+    quarantine_path: str
+    metadata_path: Optional[str] = None
+    hashes_path: Optional[str] = None
+    manifest_path: Optional[str] = None
+    rootkit_category: Optional[str] = None
+    status: str = "READY_FOR_ANALYSIS"
+    integrity_verified: bool = True
+    ready_for_sandbox: bool = True
+    created_at: Optional[str] = None
+
+
+@app.post("/api/quarantine/manifest")
+def receive_quarantine_manifest(manifest: QuarantineManifest):
+    artifacts = load_json(QUARANTINE_FILE)
+
+    manifest_dict = manifest.model_dump()
+
+    if not manifest_dict.get("created_at"):
+        manifest_dict["created_at"] = datetime.utcnow().isoformat() + "Z"
+
+    manifest_dict["received_by_backend_at"] = datetime.utcnow().isoformat() + "Z"
+    manifest_dict["source"] = "M2_QUARANTINE_MANAGER"
+
+    existing = next(
+        (a for a in artifacts if a.get("artifact_id") == manifest.artifact_id),
+        None
+    )
+
+    if existing:
+        existing.update(manifest_dict)
+    else:
+        artifacts.append(manifest_dict)
+
+    save_json(QUARANTINE_FILE, artifacts)
+
+    return {
+        "message": "M2 quarantine manifest received successfully",
+        "artifact": manifest_dict
+    }
+
+
+@app.get("/api/quarantine/ready")
+def get_ready_for_analysis_artifacts():
+    artifacts = load_json(QUARANTINE_FILE)
+
+    ready = [
+        a for a in artifacts
+        if a.get("status") == "READY_FOR_ANALYSIS"
+        or a.get("ready_for_sandbox") is True
+    ]
+
+    return {
+        "count": len(ready),
+        "artifacts": ready
+    }
+
+
+# ============================================================
+# M4 Integration with M3 Sandbox Analysis
+# ============================================================
+
+SANDBOX_RESULTS_FILE = os.path.join(DATA_DIR, "sandbox_results.json")
+
+
+class SandboxResult(BaseModel):
+    artifact_id: str
+    alert_id: Optional[str] = None
+    sandbox_id: Optional[str] = None
+    execution_status: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    processes_created: list = []
+    files_created: list = []
+    files_modified: list = []
+    network_connections: list = []
+    persistence_indicators: list = []
+    behavior_summary: Optional[str] = None
+    risk_observations: list = []
+
+
+@app.post("/api/sandbox/results")
+def receive_sandbox_results(result: SandboxResult):
+    results = load_json(SANDBOX_RESULTS_FILE)
+
+    result_dict = result.model_dump()
+    result_dict["received_at"] = datetime.utcnow().isoformat() + "Z"
+
+    results.append(result_dict)
+    save_json(SANDBOX_RESULTS_FILE, results)
+
+    artifacts = load_json(QUARANTINE_FILE)
+
+    for artifact in artifacts:
+        if artifact.get("artifact_id") == result.artifact_id:
+            artifact["sandbox_status"] = "RESULT_RECEIVED"
+            artifact["sandbox_result"] = result_dict
+
+    save_json(QUARANTINE_FILE, artifacts)
+
+    return {
+        "message": "Sandbox result received successfully",
+        "artifact_id": result.artifact_id,
+        "sandbox_result": result_dict
+    }
+
+
+@app.get("/api/sandbox/results")
+def get_sandbox_results():
+    results = load_json(SANDBOX_RESULTS_FILE)
+
+    return {
+        "count": len(results),
+        "results": results
+    }
+
+
+@app.get("/api/sandbox/results/{artifact_id}")
+def get_sandbox_result_by_artifact(artifact_id: str):
+    results = load_json(SANDBOX_RESULTS_FILE)
+
+    artifact_results = [
+        r for r in results
+        if r.get("artifact_id") == artifact_id
+    ]
+
+    return {
+        "count": len(artifact_results),
+        "results": artifact_results
+    }
