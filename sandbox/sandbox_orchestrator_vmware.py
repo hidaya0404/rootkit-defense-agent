@@ -398,12 +398,19 @@ def build_behavior_summary(local_result_path):
     }
 
 
-def get_sandbox_status(exit_code):
+def get_sandbox_status(exit_code, stderr_text="", artifact_name=""):
     if exit_code == 0:
         return "COMPLETED", None
 
     if exit_code == 124:
         return "TIMEOUT", "Analyse arretee par timeout"
+
+    if "Exec format error" in stderr_text or artifact_name.endswith(".ko"):
+        return (
+            "COMPLETED",
+            "Artefact non executable directement en user-space. "
+            "Probable module kernel Linux (.ko). Analyse sandbox terminee avec observation."
+        )
 
     return "FAILED", f"Analyse terminee avec exit_code={exit_code}"
 
@@ -457,7 +464,11 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None, demo_fast=Fal
         guest_copy_from(f"{REMOTE_WORKDIR}/results/.", str(local_result_path))
 
         behavior_summary = build_behavior_summary(local_result_path)
-        sandbox_status, error_message = get_sandbox_status(behavior_summary["exit_code"])
+        sandbox_status, error_message = get_sandbox_status(
+             behavior_summary["exit_code"],
+             behavior_summary.get("stderr", ""),
+             artifact_info.get("filename", artifact_path.name) if artifact_info else artifact_path.name,
+      )
 
         result_json = {
             "analysis_id": analysis_id,
@@ -520,7 +531,11 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None, demo_fast=Fal
             "execution_status": sandbox_status,
             "processes_created": behavior_summary["processes"],
             "persistence_indicators": [],
-            "risk_observations": [],
+            "risk_observations": [
+               "Artefact identifié comme module kernel Linux (.ko), non exécutable directement en user-space."
+            ] if (
+               artifact_info and artifact_info.get("filename", "").endswith(".ko")
+            ) or "Exec format error" in behavior_summary.get("stderr", "") else [],
 
             "local_result_path": str(local_result_path),
         }
@@ -550,18 +565,49 @@ def send_result_to_backend(result):
     print(f"[+] Envoi resultat vers backend : {url}")
 
     behavior = result.get("behavior_summary", {})
+    is_kernel_module_observation = False
 
     if isinstance(behavior, dict):
-        behavior_summary_text = (
-            f"Execution success={behavior.get('execution_success')}; "
-            f"exit_code={behavior.get('exit_code')}; "
-            f"files_created={len(behavior.get('files_created', []))}; "
-            f"files_modified={len(behavior.get('files_modified', []))}; "
-            f"network_connections={len(behavior.get('network_connections', []))}; "
-            f"stderr_empty={behavior.get('stderr_empty')}"
+        stderr_text = str(behavior.get("stderr", ""))
+        artifact_name = str(result.get("artifact_name", ""))
+
+        is_kernel_module_observation = (
+            result.get("execution_status") == "COMPLETED"
+            and (
+                "Exec format error" in stderr_text
+                or artifact_name.endswith(".ko")
+            )
         )
+
+        if is_kernel_module_observation:
+            behavior_summary_text = (
+                f"Sandbox analysis completed; "
+                f"artifact_execution=not_applicable_user_space; "
+                f"exit_code={behavior.get('exit_code')}; "
+                f"artifact_type=kernel_module; "
+                f"files_created={len(behavior.get('files_created', []))}; "
+                f"files_modified={len(behavior.get('files_modified', []))}; "
+                f"network_connections={len(behavior.get('network_connections', []))}; "
+                f"observation=Linux kernel module not directly executable in user-space"
+            )
+        else:
+            behavior_summary_text = (
+                f"Execution success={behavior.get('execution_success')}; "
+                f"exit_code={behavior.get('exit_code')}; "
+                f"files_created={len(behavior.get('files_created', []))}; "
+                f"files_modified={len(behavior.get('files_modified', []))}; "
+                f"network_connections={len(behavior.get('network_connections', []))}; "
+                f"stderr_empty={behavior.get('stderr_empty')}"
+            )
     else:
         behavior_summary_text = str(behavior)
+
+    risk_observations = result.get("risk_observations", [])
+
+    if is_kernel_module_observation:
+        observation = "Artefact identifié comme module kernel Linux (.ko), non exécutable directement en user-space."
+        if observation not in risk_observations:
+            risk_observations.append(observation)
 
     m4_payload = {
         "artifact_id": result.get("artifact_id"),
@@ -578,7 +624,7 @@ def send_result_to_backend(result):
         "files_modified": result.get("files_modified", []),
         "network_connections": result.get("network_connections", []),
         "persistence_indicators": result.get("persistence_indicators", []),
-        "risk_observations": result.get("risk_observations", []),
+        "risk_observations": risk_observations,
     }
 
     print("[+] Payload envoye a M4 :")
