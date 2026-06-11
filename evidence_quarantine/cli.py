@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from evidence_quarantine.backend_alert_processor import process_backend_ready_alerts
 from evidence_quarantine.backend_client import BackendSyncError, build_quarantine_manifest, post_quarantine_manifest
 from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.lab_detector import LabDetector
@@ -107,6 +108,23 @@ def _sync_manifest(args: argparse.Namespace) -> int:
             return 2
 
     _json_print({"synced": len(synced), "records": synced})
+    return 0
+
+
+def _process_backend_alerts(args: argparse.Namespace) -> int:
+    manager = QuarantineManager(_config_from_args(args))
+    try:
+        payload = process_backend_ready_alerts(
+            manager,
+            args.backend_url,
+            status=args.status,
+            timeout=args.timeout,
+            send_manifest=not args.no_send_manifest,
+        )
+    except BackendSyncError as exc:
+        _json_print({"error": str(exc), "backend_url": args.backend_url})
+        return 2
+    _json_print(payload)
     return 0
 
 
@@ -233,6 +251,24 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--public-base-url", help="Public base URL of this M2 API for download_url generation")
     sync.add_argument("--timeout", type=float, default=10.0)
     sync.set_defaults(func=_sync_manifest)
+
+    process_backend = subparsers.add_parser(
+        "process-backend-alerts",
+        help="Pull ARTIFACT_READY alerts from M4, quarantine artifacts, and send manifest",
+    )
+    process_backend.add_argument("--backend-url", required=True, help="M4 backend base URL")
+    process_backend.add_argument(
+        "--status",
+        default="ARTIFACT_READY",
+        help="Alert status to pull from M4",
+    )
+    process_backend.add_argument("--timeout", type=float, default=10.0)
+    process_backend.add_argument(
+        "--no-send-manifest",
+        action="store_true",
+        help="Quarantine artifacts locally but do not POST the M2 manifest to M4",
+    )
+    process_backend.set_defaults(func=_process_backend_alerts)
 
     demo = subparsers.add_parser("demo", help="Create a benign sample and quarantine it")
     demo.add_argument("--alert-id")

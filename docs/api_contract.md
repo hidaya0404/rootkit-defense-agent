@@ -71,18 +71,26 @@ Retourne le manifest compatible avec le backend M4 :
 {
   "artifact_id": "ART-ALT-2026-000001",
   "alert_id": "ALT-2026-000001",
+  "timestamp": "2026-05-28T19:22:07Z",
   "filename": "rk_demo.ko",
   "sha256": "...",
   "md5": "...",
   "sha1": "...",
+  "hashes": {
+    "md5": "...",
+    "sha1": "...",
+    "sha256": "..."
+  },
   "original_path": "/tmp/rk_demo.ko",
   "quarantine_path": "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
   "stored_path": "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
   "metadata_path": "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/metadata.json",
   "hashes_path": "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/hashes.json",
   "manifest_path": "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/manifest.json",
+  "backend_manifest_path": "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/backend_manifest.json",
   "rootkit_category": "kernel_module_rootkit_suspect",
   "status": "READY_FOR_ANALYSIS",
+  "source_alert_status": "ARTIFACT_READY",
   "integrity_verified": true,
   "ready_for_sandbox": true,
   "download_url": "/quarantine/ALT-2026-000001/download",
@@ -124,4 +132,36 @@ python -m evidence_quarantine --storage-root ./runtime/rootkit-defense \
   sync-manifest \
   --backend-url http://127.0.0.1:8000 \
   --ready-only
+```
+
+## CLI M4 -> M2 -> M4
+
+Recuperer les alertes M4 dont l'artefact est pret, telecharger l'artefact, le
+mettre en quarantaine, generer `backend_manifest.json`, puis poster le manifest
+sur `POST /api/quarantine/manifest` :
+
+```bash
+python -m evidence_quarantine --storage-root ./runtime/rootkit-defense \
+  process-backend-alerts \
+  --backend-url http://127.0.0.1:8000 \
+  --status ARTIFACT_READY
+```
+
+Flux attendu :
+
+```text
+GET /api/alerts?status=ARTIFACT_READY
+GET /api/artifacts/{alert_id}/download
+M2 quarantine + hash + metadata + audit + backend_manifest.json
+POST /api/quarantine/manifest
+```
+
+Pour tester seulement la quarantaine locale sans renvoyer le manifest :
+
+```bash
+python -m evidence_quarantine --storage-root ./runtime/rootkit-defense \
+  process-backend-alerts \
+  --backend-url http://127.0.0.1:8000 \
+  --status ARTIFACT_READY \
+  --no-send-manifest
 ```
