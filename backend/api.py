@@ -1,5 +1,6 @@
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, UploadFile, File, Form, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -12,6 +13,8 @@ from analysis.static_analyzer import analyze_file
 from analysis.report_generator import generate_html_report
 
 app = FastAPI(title="Rootkit Defense Agent API - M4")
+
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
 DATA_DIR = "backend/data"
 ALERTS_FILE = os.path.join(DATA_DIR, "alerts.json")
@@ -435,5 +438,93 @@ def download_quarantined_artifact(artifact_id: str):
     return FileResponse(
         path=file_path,
         filename=filename,
+        media_type="application/octet-stream"
+    )
+
+
+
+@app.get("/ui")
+def splash_screen():
+    return FileResponse("web/splash.html")
+
+
+@app.get("/dashboard")
+def dashboard():
+    return FileResponse("web/dashboard.html")
+
+# ============================================================
+# M1 -> M4 -> M2 Compatibility Endpoints
+# ============================================================
+
+ARTIFACTS_DIR = "artifacts"
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+
+
+@app.post("/api/artifacts/upload")
+async def upload_artifact_from_m1(
+    alert_id: str = Form(...),
+    sha256: str = Form(None),
+    original_path: str = Form(None),
+    file: UploadFile = File(...)
+):
+    """
+    M1 uploads a suspicious artifact linked to an alert.
+    The artifact is saved on M4 backend so M2 can download it.
+    """
+    artifact_dir = os.path.join(ARTIFACTS_DIR, alert_id)
+    os.makedirs(artifact_dir, exist_ok=True)
+
+    file_path = os.path.join(artifact_dir, file.filename)
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    alerts = load_json(ALERTS_FILE)
+
+    for alert in alerts:
+        if alert.get("alert_id") == alert_id:
+            alert["status"] = "ARTIFACT_READY"
+            alert["artifact_path"] = file_path
+            alert["artifact_sha256"] = sha256
+            alert["original_path"] = original_path
+            alert["artifact_filename"] = file.filename
+            alert["artifact_uploaded_at"] = datetime.utcnow().isoformat() + "Z"
+
+    save_json(ALERTS_FILE, alerts)
+
+    return {
+        "status": "uploaded",
+        "message": "Artifact uploaded successfully",
+        "alert_id": alert_id,
+        "filename": file.filename,
+        "artifact_path": file_path,
+        "sha256": sha256,
+        "download_url": f"/api/artifacts/{alert_id}/download"
+    }
+
+
+@app.get("/api/artifacts/{alert_id}/download")
+def download_artifact_for_m2(alert_id: str):
+    """
+    M2 downloads the artifact uploaded by M1.
+    """
+    artifact_dir = os.path.join(ARTIFACTS_DIR, alert_id)
+
+    if not os.path.exists(artifact_dir):
+        raise HTTPException(status_code=404, detail="Artifact directory not found")
+
+    files = os.listdir(artifact_dir)
+
+    if not files:
+        raise HTTPException(status_code=404, detail="Artifact folder is empty")
+
+    file_path = os.path.join(artifact_dir, files[0])
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Artifact file not found")
+
+    return FileResponse(
+        path=file_path,
+        filename=files[0],
         media_type="application/octet-stream"
     )
