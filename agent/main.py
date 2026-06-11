@@ -2,6 +2,9 @@ import time
 import logging
 import os
 import sys
+import requests
+import json
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.config import CONFIG
@@ -10,7 +13,7 @@ from agent.monitor_kernel import scan_kernel_modules
 from agent.monitor_files import scan_suspicious_executables, scan_file_integrity
 from agent.monitor_network import scan_network
 
-os.makedirs('logs', exist_ok=True)
+os.makedirs('/opt/rootkit-defense-agent/logs', exist_ok=True)
 
 logging.basicConfig(
     filename=CONFIG["log_file"],
@@ -25,6 +28,17 @@ def send_alert(alert):
         f.write(json.dumps(alert) + '\n')
     logging.info(f"Alerte : {alert['type']} - {alert['severity']}")
     print(f"[ALERTE] {alert['severity']} — {alert['type']} : {alert['description']}")
+
+  # Envoyer au backend
+    try:
+        url = CONFIG["backend_url"] + CONFIG["alert_endpoint"]
+        response = requests.post(url, json=alert, timeout=5)
+        if response.status_code == 200:
+            print(f"[BACKEND] ✅ Envoyée : {alert['type']}")
+        else:
+            print(f"[BACKEND] ⚠️ Status : {response.status_code}")
+    except Exception as e:
+        print(f"[BACKEND] ⚠️ Erreur : {e}")
 
 def run_scans():
     while True:
