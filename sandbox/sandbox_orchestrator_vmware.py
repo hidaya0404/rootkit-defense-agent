@@ -549,8 +549,43 @@ def send_result_to_backend(result):
     url = BACKEND_URL.rstrip("/") + SANDBOX_RESULT_ENDPOINT
     print(f"[+] Envoi resultat vers backend : {url}")
 
+    behavior = result.get("behavior_summary", {})
+
+    if isinstance(behavior, dict):
+        behavior_summary_text = (
+            f"Execution success={behavior.get('execution_success')}; "
+            f"exit_code={behavior.get('exit_code')}; "
+            f"files_created={len(behavior.get('files_created', []))}; "
+            f"files_modified={len(behavior.get('files_modified', []))}; "
+            f"network_connections={len(behavior.get('network_connections', []))}; "
+            f"stderr_empty={behavior.get('stderr_empty')}"
+        )
+    else:
+        behavior_summary_text = str(behavior)
+
+    m4_payload = {
+        "artifact_id": result.get("artifact_id"),
+        "alert_id": result.get("alert_id"),
+        "sandbox_id": result.get("sandbox_id"),
+        "execution_status": result.get("execution_status"),
+        "started_at": result.get("started_at"),
+        "finished_at": result.get("finished_at"),
+
+        "behavior_summary": behavior_summary_text,
+
+        "processes_created": result.get("processes_created", []),
+        "files_created": result.get("files_created", []),
+        "files_modified": result.get("files_modified", []),
+        "network_connections": result.get("network_connections", []),
+        "persistence_indicators": result.get("persistence_indicators", []),
+        "risk_observations": result.get("risk_observations", []),
+    }
+
+    print("[+] Payload envoye a M4 :")
+    print(json.dumps(m4_payload, indent=4, ensure_ascii=False))
+
     try:
-        response = requests.post(url, json=result, timeout=5)
+        response = requests.post(url, json=m4_payload, timeout=5)
         print(f"[+] Status backend : {response.status_code}")
         print(response.text)
     except Exception as e:
