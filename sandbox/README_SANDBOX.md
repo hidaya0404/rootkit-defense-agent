@@ -165,6 +165,14 @@ Remarque importante :
 Le mot de passe réel ne doit pas être publié dans GitHub.
 Le fichier `sandbox_config.py` doit rester local ou être remplacé par un fichier exemple sans mot de passe réel.
 
+Tu peux aussi surcharger les identifiants au lancement avec des variables d'environnement :
+
+```powershell
+$env:RDA_GUEST_USER="asma"
+$env:RDA_GUEST_PASSWORD="vrai_mot_de_passe"
+python sandbox/sandbox_orchestrator.py --metadata sandbox/test_metadata.json
+```
+
 ---
 
 ## 8. Fichiers ignorés par Git

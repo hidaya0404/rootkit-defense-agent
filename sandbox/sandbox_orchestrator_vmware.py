@@ -10,11 +10,14 @@ from urllib.parse import urljoin
 import requests
 
 from sandbox_config import (
+    VMRUN,
+    VMX_PATH,
     VM_NAME,
     SNAPSHOT_NAME,
-    VBOXMANAGE,
-    GUEST_USER,
-    GUEST_PASSWORD,
+    SSH_HOST,
+    SSH_PORT,
+    SSH_USER,
+    SSH_KEY_PATH,
     REMOTE_WORKDIR,
     BACKEND_URL,
     SANDBOX_RESULT_ENDPOINT,
@@ -23,49 +26,18 @@ from sandbox_config import (
 
 
 # ============================================================
-# Utilitaires généraux
+# Utils
 # ============================================================
-
-def _format_command(command):
-    """
-    Affiche une commande proprement sans exposer le mot de passe.
-    """
-    if isinstance(command, (list, tuple)):
-        parts = []
-        hide_next = False
-
-        for part in command:
-            part = str(part)
-
-            if hide_next:
-                parts.append("********")
-                hide_next = False
-                continue
-
-            if part == "--password":
-                parts.append(part)
-                hide_next = True
-                continue
-
-            if any(ch.isspace() for ch in part):
-                parts.append(f'"{part}"')
-            else:
-                parts.append(part)
-
-        return " ".join(parts)
-
-    return str(command).replace(GUEST_PASSWORD, "********")
-
 
 def run_cmd(command, check=True, log=True):
     if log:
-        print(f"[CMD] {_format_command(command)}")
+        print("[CMD]", " ".join(str(x) for x in command))
 
     result = subprocess.run(
         command,
-        shell=isinstance(command, str),
         text=True,
         capture_output=True,
+        shell=False,
     )
 
     if log and result.stdout:
@@ -75,7 +47,7 @@ def run_cmd(command, check=True, log=True):
         print(result.stderr)
 
     if check and result.returncode != 0:
-        raise RuntimeError(f"Commande echouee : {_format_command(command)}")
+        raise RuntimeError("Commande echouee : " + " ".join(str(x) for x in command))
 
     return result
 
@@ -97,18 +69,12 @@ def read_text_file(path, max_chars=5000):
         return ""
 
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        return text[:max_chars]
+        return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
     except Exception:
         return ""
 
 
 def get_result_file(local_result_path, filename):
-    """
-    Selon VBoxManage copyfrom, les fichiers peuvent être copiés directement
-    dans analysis_xxx/ ou dans analysis_xxx/results/.
-    Cette fonction cherche dans les deux emplacements.
-    """
     local_result_path = Path(local_result_path)
 
     direct = local_result_path / filename
@@ -121,32 +87,8 @@ def get_result_file(local_result_path, filename):
 
 
 # ============================================================
-# Validation du format M2
+# Metadata M2
 # ============================================================
-
-def validate_artifact_for_sandbox(artifact_info):
-    """
-    Vérifie que l’artefact venant de M2 est prêt pour la sandbox.
-    Si artifact_info est vide, on considère qu'on est en mode test local.
-    """
-    if not artifact_info:
-        return True
-
-    status_ok = artifact_info.get("status") == "READY_FOR_ANALYSIS"
-    integrity_ok = artifact_info.get("integrity_verified") is True
-    sandbox_ok = artifact_info.get("ready_for_sandbox") is True
-
-    if not status_ok:
-        raise ValueError("Artefact refuse : status doit etre READY_FOR_ANALYSIS")
-
-    if not integrity_ok:
-        raise ValueError("Artefact refuse : integrity_verified doit etre true")
-
-    if not sandbox_ok:
-        raise ValueError("Artefact refuse : ready_for_sandbox doit etre true")
-
-    return True
-
 
 def load_artifact_metadata(metadata_path):
     metadata_path = Path(metadata_path)
@@ -158,13 +100,23 @@ def load_artifact_metadata(metadata_path):
         return json.load(f)
 
 
+def validate_artifact_for_sandbox(artifact_info):
+    if not artifact_info:
+        return True
+
+    if artifact_info.get("status") != "READY_FOR_ANALYSIS":
+        raise ValueError("Artefact refuse : status doit etre READY_FOR_ANALYSIS")
+
+    if artifact_info.get("integrity_verified") is not True:
+        raise ValueError("Artefact refuse : integrity_verified doit etre true")
+
+    if artifact_info.get("ready_for_sandbox") is not True:
+        raise ValueError("Artefact refuse : ready_for_sandbox doit etre true")
+
+    return True
+
+
 def download_artifact_from_backend(artifact_info):
-    """
-    Télécharge l’artefact depuis download_url via le backend M4.
-    Exemple :
-    download_url = /api/quarantine/artifact_001/download
-    BACKEND_URL = http://127.0.0.1:5000
-    """
     download_url = artifact_info.get("download_url")
 
     if not download_url:
@@ -192,24 +144,23 @@ def download_artifact_from_backend(artifact_info):
         f.write(response.content)
 
     print(f"[+] Artefact telecharge : {local_path}")
+
     return local_path
 
 
 def resolve_artifact_path(local_artifact_path=None, artifact_info=None):
-    """
-    Priorité :
-    1. chemin local donné manuellement
-    2. quarantine_path si accessible localement
-    3. download_url via backend
-    4. artefact de test local
-    """
     if local_artifact_path:
         path = Path(local_artifact_path).resolve()
+
         if not path.exists():
             raise FileNotFoundError(f"Artefact introuvable : {path}")
+
         return path
 
     if artifact_info:
+        if artifact_info.get("download_url"):
+            return download_artifact_from_backend(artifact_info)
+
         quarantine_path = artifact_info.get("quarantine_path")
 
         if quarantine_path:
@@ -219,69 +170,120 @@ def resolve_artifact_path(local_artifact_path=None, artifact_info=None):
                 print(f"[+] Artefact recupere depuis quarantine_path : {qpath}")
                 return qpath.resolve()
 
-        if artifact_info.get("download_url"):
-            return download_artifact_from_backend(artifact_info)
-
     default_path = Path("sandbox/sample_artifacts/benign_suspicious.sh").resolve()
 
     if not default_path.exists():
         raise FileNotFoundError(f"Artefact de test introuvable : {default_path}")
 
     print("[i] Aucun artefact M2 fourni, utilisation de l’artefact de test local.")
+
     return default_path
 
 
 def verify_artifact_hash(local_artifact_path, artifact_info, calculated_sha256):
-    """
-    Si M2 fournit un sha256 réel, on le compare au hash local.
-    Si le champ est vide ou contient "...", on ignore la comparaison.
-    """
     if not artifact_info:
         return
 
     expected_sha256 = artifact_info.get("sha256")
 
     if not expected_sha256 or expected_sha256.strip() == "...":
+        print("[i] SHA256 M2 absent ou non reel, verification ignoree en mode test.")
         return
 
     if calculated_sha256.lower() != expected_sha256.lower():
-        raise ValueError(
-            "Hash SHA256 invalide : l’artefact local ne correspond pas au hash M2"
-        )
+        raise ValueError("Hash SHA256 invalide : l’artefact analyse ne correspond pas au manifest M2")
+
+    print("[+] Verification SHA256 reussie")
 
 
 # ============================================================
-# Gestion VirtualBox
+# VMware + SSH/SCP
 # ============================================================
+
+def ssh_target():
+    return f"{SSH_USER}@{SSH_HOST}"
+
+
+def ssh_base_command():
+    return [
+        "ssh",
+        "-i", SSH_KEY_PATH,
+        "-p", str(SSH_PORT),
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=no",
+        ssh_target(),
+    ]
+
+
+def scp_base_command():
+    return [
+        "scp",
+        "-i", SSH_KEY_PATH,
+        "-P", str(SSH_PORT),
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no",
+    ]
+
+
+def vmrun(args, check=True):
+    return run_cmd([VMRUN] + args, check=check, log=True)
+
 
 def restore_snapshot():
-    print("[+] Restauration du snapshot propre")
-    run_cmd(f'"{VBOXMANAGE}" controlvm "{VM_NAME}" poweroff', check=False)
+    print("[+] Restauration du snapshot VMware propre")
+
+    vmrun(["stop", VMX_PATH, "hard"], check=False)
     time.sleep(3)
-    run_cmd(f'"{VBOXMANAGE}" snapshot "{VM_NAME}" restore "{SNAPSHOT_NAME}"')
+
+    vmrun(["revertToSnapshot", VMX_PATH, SNAPSHOT_NAME], check=True)
+    time.sleep(3)
 
 
-def guest_run(command, check=True, timeout_ms=120000, log=True):
+def start_vm():
+    print("[+] Demarrage de la VM VMware sandbox")
+
+    vmrun(["start", VMX_PATH, "nogui"], check=False)
+
+    wait_for_ssh_ready()
+
+
+def stop_vm():
+    print("[+] Arret de la VM VMware sandbox")
+    vmrun(["stop", VMX_PATH, "hard"], check=False)
+    time.sleep(3)
+
+
+def wait_for_ssh_ready(timeout_seconds=120, poll_interval=5):
+    print("[+] Attente disponibilite SSH de la sandbox")
+
+    deadline = time.time() + timeout_seconds
+    last_error = ""
+
+    while time.time() < deadline:
+        result = run_cmd(
+            ssh_base_command() + ["whoami && pwd"],
+            check=False,
+            log=False,
+        )
+
+        if result.returncode == 0:
+            print("[+] SSH pret")
+            print(result.stdout.strip())
+            return
+
+        last_error = (result.stderr or result.stdout or "").strip()
+        time.sleep(poll_interval)
+
+    raise RuntimeError(
+        "SSH non disponible. Verifier IP, cle SSH, sshd et reseau Host-only. "
+        f"Derniere erreur : {last_error or 'aucune information'}"
+    )
+
+
+def guest_run(command, check=True, log=True):
     return run_cmd(
-        [
-            VBOXMANAGE,
-            "guestcontrol",
-            VM_NAME,
-            "run",
-            "--username",
-            GUEST_USER,
-            "--password",
-            GUEST_PASSWORD,
-            "--exe",
-            "/bin/bash",
-            "--wait-stdout",
-            "--wait-stderr",
-            "--timeout",
-            str(timeout_ms),
-            "--",
-            "-lc",
-            command,
-        ],
+        ssh_base_command() + [command],
         check=check,
         log=log,
     )
@@ -289,81 +291,42 @@ def guest_run(command, check=True, timeout_ms=120000, log=True):
 
 def guest_copy_to(local_path, remote_path):
     run_cmd(
-        [
-            VBOXMANAGE,
-            "guestcontrol",
-            VM_NAME,
-            "copyto",
-            "--username",
-            GUEST_USER,
-            "--password",
-            GUEST_PASSWORD,
-            "--target-directory",
-            remote_path,
+        scp_base_command() + [
             str(local_path),
-        ]
+            f"{ssh_target()}:{remote_path}",
+        ],
+        check=True,
+        log=True,
     )
 
 
 def guest_copy_from(remote_path, local_path):
+    local_path = Path(local_path)
+    local_path.mkdir(parents=True, exist_ok=True)
+
     run_cmd(
-        [
-            VBOXMANAGE,
-            "guestcontrol",
-            VM_NAME,
-            "copyfrom",
-            "--recursive",
-            "--username",
-            GUEST_USER,
-            "--password",
-            GUEST_PASSWORD,
-            "--target-directory",
+        scp_base_command() + [
+            "-r",
+            f"{ssh_target()}:{remote_path}",
             str(local_path),
-            remote_path,
-        ]
+        ],
+        check=True,
+        log=True,
     )
-
-
-def wait_for_guest_ready(timeout_seconds=240, poll_interval=5):
-    print("[+] Attente disponibilite du guest")
-    deadline = time.time() + timeout_seconds
-
-    while time.time() < deadline:
-        result = guest_run("true", check=False, timeout_ms=15000, log=False)
-
-        if result.returncode == 0:
-            return
-
-        time.sleep(poll_interval)
-
-    raise RuntimeError(
-        "Le guest n'a pas ete pret a temps. "
-        "Verifier Guest Additions, utilisateur invite et mot de passe."
-    )
-
-
-def start_vm():
-    print("[+] Demarrage de la VM sandbox")
-    run_cmd(f'"{VBOXMANAGE}" startvm "{VM_NAME}" --type headless')
-    wait_for_guest_ready()
-
-
-def stop_vm():
-    print("[+] Arret de la VM sandbox")
-    run_cmd(f'"{VBOXMANAGE}" controlvm "{VM_NAME}" poweroff', check=False)
-    time.sleep(5)
 
 
 def prepare_guest():
-    print("[+] Preparation dossier sandbox dans la VM")
+    print("[+] Preparation dossier sandbox dans la VM via SSH")
+
     guest_run(
         f"rm -rf {REMOTE_WORKDIR} && "
-        f"mkdir -p {REMOTE_WORKDIR}/input {REMOTE_WORKDIR}/results"
+        f"mkdir -p {REMOTE_WORKDIR}/input {REMOTE_WORKDIR}/results && "
+        f"chmod -R 755 {REMOTE_WORKDIR}"
     )
 
 
 # ============================================================
-# Résumé comportemental
+# Analyse des logs
 # ============================================================
 
 def parse_file_paths(file_content):
@@ -371,10 +334,10 @@ def parse_file_paths(file_content):
 
     for line in file_content.splitlines():
         line = line.strip()
+
         if not line:
             continue
 
-        # Le premier champ est le chemin du fichier.
         paths.add(line.split(" ")[0])
 
     return paths
@@ -384,8 +347,7 @@ def parse_new_lines(before_text, after_text, limit=50):
     before = set(line.strip() for line in before_text.splitlines() if line.strip())
     after = set(line.strip() for line in after_text.splitlines() if line.strip())
 
-    new_items = list(after - before)
-    return new_items[:limit]
+    return list(after - before)[:limit]
 
 
 def build_behavior_summary(local_result_path):
@@ -413,32 +375,44 @@ def build_behavior_summary(local_result_path):
 
     files_before = parse_file_paths(files_before_text)
     files_after = parse_file_paths(files_after_text)
-
     files_created_or_modified = sorted(list(files_after - files_before))
+
+    processes = parse_new_lines(processes_before, processes_after)
+    network_connections = parse_new_lines(network_before, network_after)
 
     return {
         "execution_success": exit_code == 0,
         "exit_code": exit_code,
         "stderr_empty": len(stderr_text.strip()) == 0,
         "files_created_or_modified": len(files_created_or_modified) > 0,
-        "network_activity_observed": len(parse_new_lines(network_before, network_after)) > 0,
+        "network_activity_observed": len(network_connections) > 0,
         "started_at": timestamp_start,
         "finished_at": timestamp_end,
-        "processes": parse_new_lines(processes_before, processes_after),
+        "processes": processes,
         "files_created": files_created_or_modified,
         "files_modified": files_created_or_modified,
-        "network_connections": parse_new_lines(network_before, network_after),
+        "network_connections": network_connections,
         "stdout": stdout_text,
         "stderr": stderr_text,
         "strace_excerpt": strace_excerpt,
     }
 
 
+def get_sandbox_status(exit_code):
+    if exit_code == 0:
+        return "COMPLETED", None
+
+    if exit_code == 124:
+        return "TIMEOUT", "Analyse arretee par timeout"
+
+    return "FAILED", f"Analyse terminee avec exit_code={exit_code}"
+
+
 # ============================================================
 # Analyse sandbox
 # ============================================================
 
-def analyze_artifact(local_artifact_path=None, artifact_info=None):
+def analyze_artifact(local_artifact_path=None, artifact_info=None, demo_fast=False):
     validate_artifact_for_sandbox(artifact_info)
 
     artifact_path = resolve_artifact_path(local_artifact_path, artifact_info)
@@ -446,23 +420,21 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
     if not artifact_path.exists():
         raise FileNotFoundError(f"Artefact introuvable : {artifact_path}")
 
+    artifact_hash = sha256_file(artifact_path)
+    verify_artifact_hash(artifact_path, artifact_info, artifact_hash)
+
     analysis_id = f"analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     local_result_path = Path(LOCAL_RESULTS_DIR).resolve() / analysis_id
     local_result_path.mkdir(parents=True, exist_ok=True)
 
-    artifact_hash = sha256_file(artifact_path)
-    verify_artifact_hash(artifact_path, artifact_info, artifact_hash)
-
-    if artifact_path.suffix.lower() == ".ko":
-        print(
-            "[!] Artefact .ko detecte. "
-            "Le module ne sera pas charge automatiquement dans le kernel. "
-            "Analyse controlee uniquement."
-        )
-
     try:
-        restore_snapshot()
-        start_vm()
+        if demo_fast:
+            print("[DEMO] Mode rapide : VM deja prete, pas de snapshot.")
+            wait_for_ssh_ready(timeout_seconds=30)
+        else:
+            restore_snapshot()
+            start_vm()
+
         prepare_guest()
 
         print("[+] Copie de l'artefact vers la VM")
@@ -470,67 +442,58 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
         guest_copy_to(str(artifact_path), remote_artifact)
 
         print("[+] Copie du runner vers la VM")
-        guest_copy_to(
-            str(Path("sandbox/guest_runner.sh").resolve()),
-            f"{REMOTE_WORKDIR}/guest_runner.sh",
-        )
+        remote_runner = f"{REMOTE_WORKDIR}/guest_runner.sh"
+        guest_copy_to(str(Path("sandbox/guest_runner.sh").resolve()), remote_runner)
 
-        guest_run(f"chmod +x {REMOTE_WORKDIR}/guest_runner.sh")
+        guest_run(f"chmod +x {remote_runner} {remote_artifact}")
 
         print("[+] Lancement analyse comportementale")
         guest_run(
-            f"bash {REMOTE_WORKDIR}/guest_runner.sh "
-            f"{remote_artifact} {REMOTE_WORKDIR}/results",
+            f"bash {remote_runner} {remote_artifact} {REMOTE_WORKDIR}/results",
             check=False,
         )
 
         print("[+] Recuperation des resultats")
-        guest_copy_from(f"{REMOTE_WORKDIR}/results", str(local_result_path))
+        guest_copy_from(f"{REMOTE_WORKDIR}/results/.", str(local_result_path))
 
         behavior_summary = build_behavior_summary(local_result_path)
+        sandbox_status, error_message = get_sandbox_status(behavior_summary["exit_code"])
 
         result_json = {
             "analysis_id": analysis_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
 
-            # Champs venant de M2 si disponibles
             "artifact_id": artifact_info.get("artifact_id") if artifact_info else None,
             "alert_id": artifact_info.get("alert_id") if artifact_info else None,
             "risk_level": artifact_info.get("risk_level") if artifact_info else None,
             "rootkit_category": artifact_info.get("rootkit_category") if artifact_info else None,
 
-            # Informations artefact
             "artifact_name": artifact_info.get("filename") if artifact_info else artifact_path.name,
             "artifact_sha256": artifact_hash,
             "artifact_md5": artifact_info.get("md5") if artifact_info else None,
             "artifact_sha1": artifact_info.get("sha1") if artifact_info else None,
             "quarantine_path": artifact_info.get("quarantine_path") if artifact_info else None,
+            "download_url": artifact_info.get("download_url") if artifact_info else None,
             "metadata_path": artifact_info.get("metadata_path") if artifact_info else None,
             "manifest_path": artifact_info.get("manifest_path") if artifact_info else None,
 
-            # Informations sandbox
+            "status": "DONE",
+            "sandbox_status": sandbox_status,
+            "error_message": error_message,
+
             "sandbox_vm": VM_NAME,
             "snapshot_used": SNAPSHOT_NAME,
-            "status": "DONE",
-            "sandbox_status": "COMPLETED",
+            "vm_name": VM_NAME,
+            "snapshot_name": SNAPSHOT_NAME,
 
-            # Logs générés
-            "behavior_logs": {
-                "processes_before": "processes_before.txt",
-                "processes_after": "processes_after.txt",
-                "network_before": "network_before.txt",
-                "network_after": "network_after.txt",
-                "files_tmp_before": "files_tmp_before.txt",
-                "files_tmp_after": "files_tmp_after.txt",
-                "strace": "strace.log",
-                "stdout": "stdout.log",
-                "stderr": "stderr.log",
-                "exit_code": "exit_code.txt",
-                "timestamp_start": "timestamp_start.txt",
-                "timestamp_end": "timestamp_end.txt",
-            },
+            "analysis_started_at": behavior_summary["started_at"],
+            "analysis_finished_at": behavior_summary["finished_at"],
 
-            # Format simple demandé par M2/M4
+            "logs_path": str(local_result_path),
+            "stdout_path": str(get_result_file(local_result_path, "stdout.log")),
+            "stderr_path": str(get_result_file(local_result_path, "stderr.log")),
+            "strace_path": str(get_result_file(local_result_path, "strace.log")),
+
             "processes": behavior_summary["processes"],
             "files_created": behavior_summary["files_created"],
             "files_modified": behavior_summary["files_modified"],
@@ -543,10 +506,22 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
             "started_at": behavior_summary["started_at"],
             "finished_at": behavior_summary["finished_at"],
 
-            # Résumé lisible
+            "observed_processes": behavior_summary["processes"],
+            "file_events": {
+                "created": behavior_summary["files_created"],
+                "modified": behavior_summary["files_modified"],
+            },
+            "network_events": behavior_summary["network_connections"],
+
             "behavior_summary": behavior_summary,
 
-            # Chemin local
+            # Alias compatibles avec M4
+            "sandbox_id": VM_NAME,
+            "execution_status": sandbox_status,
+            "processes_created": behavior_summary["processes"],
+            "persistence_indicators": [],
+            "risk_observations": [],
+
             "local_result_path": str(local_result_path),
         }
 
@@ -559,8 +534,11 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None):
         return result_json
 
     finally:
-        stop_vm()
-        restore_snapshot()
+        if demo_fast:
+            print("[DEMO] Mode rapide : VM laissee allumee.")
+        else:
+            stop_vm()
+            restore_snapshot()
 
 
 # ============================================================
@@ -572,7 +550,7 @@ def send_result_to_backend(result):
     print(f"[+] Envoi resultat vers backend : {url}")
 
     try:
-        response = requests.post(url, json=result, timeout=10)
+        response = requests.post(url, json=result, timeout=5)
         print(f"[+] Status backend : {response.status_code}")
         print(response.text)
     except Exception as e:
@@ -584,7 +562,9 @@ def send_result_to_backend(result):
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Rootkit Defense Agent - Sandbox Membre 3")
+    parser = argparse.ArgumentParser(
+        description="Rootkit Defense Agent - Sandbox M3 VMware SSH"
+    )
 
     parser.add_argument(
         "--artifact",
@@ -594,6 +574,12 @@ def main():
     parser.add_argument(
         "--metadata",
         help="Chemin vers un fichier JSON metadata fourni par M2"
+    )
+
+    parser.add_argument(
+        "--demo-fast",
+        action="store_true",
+        help="Mode demo rapide : VM deja allumee, pas de snapshot."
     )
 
     args = parser.parse_args()
@@ -606,6 +592,7 @@ def main():
     result = analyze_artifact(
         local_artifact_path=args.artifact,
         artifact_info=artifact_info,
+        demo_fast=args.demo_fast,
     )
 
     send_result_to_backend(result)
