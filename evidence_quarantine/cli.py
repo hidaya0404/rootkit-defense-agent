@@ -244,7 +244,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     simulate.add_argument(
         "--scenario",
-        choices=["full", "kernel-module", "ld-preload", "systemd", "cron", "hidden-payload", "binary-tamper"],
+        choices=[
+            "full",
+            "kernel-module",
+            "ld-preload",
+            "systemd",
+            "cron",
+            "hidden-payload",
+            "binary-tamper",
+            "modules-load",
+            "modprobe",
+            "proc-inconsistency",
+            "network-stealth",
+            "log-tamper",
+        ],
         default="full",
     )
     simulate.add_argument("--lab-root", help="Directory used as fake victim filesystem")

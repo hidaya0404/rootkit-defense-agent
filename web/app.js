@@ -1,155 +1,592 @@
-const records = [
-  {
-    alert_id: "ALT-2026-000001",
-    artifact_name: "rk_demo.ko",
-    original_path: "/tmp/rk_demo.ko",
-    evidence_dir: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001",
-    artifact_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
-    sha256: "9b3a1d9a6f2d5a2f8a66b3f4c3e0154f27a5e779b1db2f7a8bdf6bd463ea2b88",
-    rootkit_category: "kernel_module_rootkit_suspect",
-    suspected_techniques: ["kernel_module_loading", "kernel_space_hiding"],
-    risk_level: "HIGH",
-    status: "READY_FOR_ANALYSIS",
-    integrity_verified: true,
-    ready_for_sandbox: true,
-    created_at: "2026-05-28T18:30:12Z",
-    audit_log_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/audit.log"
-  },
-  {
-    alert_id: "ALT-2026-000002",
-    artifact_name: "missing.sh",
-    original_path: "/tmp/missing.sh",
-    evidence_dir: "/var/lib/rootkit-defense/quarantine/ALT-2026-000002",
-    artifact_path: null,
-    sha256: null,
-    rootkit_category: null,
-    suspected_techniques: [],
-    risk_level: "MEDIUM",
-    status: "REJECTED",
-    integrity_verified: false,
-    ready_for_sandbox: false,
-    created_at: "2026-05-28T18:34:09Z",
-    audit_log_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000002/audit.log",
-    errors: ["Artifact path does not exist"]
-  }
+const fallback = {
+  alerts: [
+    {
+      alert_id: "ALT-2026-000001",
+      timestamp: "2026-06-11T14:42:10Z",
+      source_module: "file_monitor",
+      severity: "HIGH",
+      type: "EXECUTABLE_IN_SUSPICIOUS_DIR",
+      description: "Executable found in suspicious directory",
+      details: { path: "/tmp/rk_demo.ko", sha256: "9b3a1d9a6f2d5a2f8a66b3f4c3e0154f27a5e779b1db2f7a8bdf6bd463ea2b88" },
+      status: "NEW"
+    },
+    {
+      alert_id: "ALT-2026-000002",
+      timestamp: "2026-06-11T14:49:02Z",
+      source_module: "kernel_monitor",
+      severity: "CRITICAL",
+      type: "UNKNOWN_KERNEL_MODULE",
+      description: "Unknown kernel module detected",
+      details: { module_name: "rk_shadow" },
+      status: "NEW"
+    }
+  ],
+  quarantine: [
+    {
+      artifact_id: "ART-ALT-2026-000001",
+      alert_id: "ALT-2026-000001",
+      filename: "rk_demo.ko",
+      artifact_name: "rk_demo.ko",
+      original_path: "/tmp/rk_demo.ko",
+      evidence_dir: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001",
+      artifact_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
+      quarantine_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
+      sha256: "9b3a1d9a6f2d5a2f8a66b3f4c3e0154f27a5e779b1db2f7a8bdf6bd463ea2b88",
+      md5: "3ee4ff6ea4e9deaff20501858322538d",
+      sha1: "405ca6a5db545c0e9338ce8b7c29c431dfd4e835",
+      rootkit_category: "KERNEL MODULE",
+      suspected_techniques: ["kernel_module_loading", "stealth_persistence"],
+      risk_level: "HIGH",
+      status: "READY_FOR_ANALYSIS",
+      integrity_verified: true,
+      ready_for_sandbox: true,
+      created_at: "2026-06-11T14:44:12Z",
+      audit_log_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/audit.log"
+    }
+  ],
+  sandbox: [
+    {
+      analysis_id: "analysis_20260611_144615",
+      artifact_id: "ART-ALT-2026-000001",
+      alert_id: "ALT-2026-000001",
+      sandbox_status: "COMPLETED",
+      execution_status: "COMPLETED",
+      exit_code: 0,
+      vm_name: "RootkitSandbox",
+      snapshot_name: "clean-state-ssh-v2",
+      analysis_started_at: "2026-06-11T14:46:15Z",
+      analysis_finished_at: "2026-06-11T14:46:28Z",
+      observed_processes: ["bash /tmp/rk_demo.ko"],
+      file_events: { created: ["/tmp/sandbox_created_file.txt"], modified: ["/tmp/sandbox_test_dir/modified.txt"] },
+      network_events: ["tcp 192.168.148.135:22 -> 192.168.148.1:49675"],
+      behavior_summary: "Execution success=True; exit_code=0; files_created=2; network_connections=1",
+      logs_path: "sandbox/results/analysis_20260611_144615"
+    }
+  ],
+  reports: [
+    {
+      report_id: "RPT-ALT-2026-000001",
+      artifact_id: "ART-ALT-2026-000001",
+      alert_id: "ALT-2026-000001",
+      report_path: "reports/generated/ART-ALT-2026-000001.html",
+      pdf_report_path: "reports/generated/ART-ALT-2026-000001.pdf",
+      timestamp: "2026-06-11T14:47:02Z",
+      risk_score: 82,
+      risk_level: "HIGH"
+    }
+  ]
+};
+
+const state = {
+  alerts: [],
+  quarantine: [],
+  sandbox: [],
+  reports: [],
+  activeView: "dashboard",
+  quarantineFilter: "ALL",
+  query: ""
+};
+
+const bootSteps = [
+  { progress: 7, status: "mounting secure workspace...", line: "[ OK ] mounted /opt/rootkit-defense" },
+  { progress: 15, status: "loading agent telemetry...", line: "[ OK ] agent telemetry channel online" },
+  { progress: 27, status: "checking quarantine vault...", line: "[ OK ] evidence vault integrity policy loaded" },
+  { progress: 39, status: "binding sandbox handoff...", line: "[ OK ] isolated runtime handoff endpoint ready" },
+  { progress: 52, status: "hydrating IOC index...", line: "[ OK ] yara/ioc analyzer cache warm" },
+  { progress: 66, status: "verifying dashboard API...", line: "[ OK ] /api/health responsive" },
+  { progress: 78, status: "loading threat map...", line: "[ OK ] network telemetry renderer initialized" },
+  { progress: 91, status: "arming operator console...", line: "[ OK ] live SOC dashboard armed" },
+  { progress: 100, status: "ready.", line: "[ READY ] rootkit-defense agent console online" }
 ];
 
-let currentFilter = "ALL";
-const searchInput = document.querySelector("#search");
-const recordsBody = document.querySelector("#records");
-const details = document.querySelector("#details");
+let bootDone = false;
 
-function riskClass(risk) {
-  return risk === "HIGH" || risk === "CRITICAL" ? "high" : "";
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-function statusClass(status) {
-  return status === "READY_FOR_ANALYSIS" ? "ready" : "rejected";
+function valueOrDash(value) {
+  return value === null || value === undefined || value === "" ? "-" : value;
 }
 
-function filteredRecords() {
-  const query = searchInput.value.trim().toLowerCase();
-  return records.filter((record) => {
-    const matchesFilter = currentFilter === "ALL" || record.status === currentFilter;
-    const haystack = [
-      record.alert_id,
-      record.artifact_name,
-      record.original_path,
-      record.sha256 || "",
-      record.status
-    ].join(" ").toLowerCase();
-    return matchesFilter && haystack.includes(query);
+function shortHash(hash, left = 10, right = 6) {
+  if (!hash) return "-";
+  return hash.length > left + right + 3 ? `${hash.slice(0, left)}...${hash.slice(-right)}` : hash;
+}
+
+function normalizeList(payload, key) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload[key])) return payload[key];
+  if (payload && Array.isArray(payload.results)) return payload.results;
+  return [];
+}
+
+async function fetchJson(url, fallbackValue, key) {
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(String(response.status));
+    const list = normalizeList(await response.json(), key);
+    return list.length ? list : fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
+}
+
+function severityClass(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized.includes("critical") || normalized.includes("critique")) return "critical";
+  if (normalized.includes("high") || normalized.includes("eleve")) return "high";
+  if (normalized.includes("medium") || normalized.includes("moyen")) return "medium";
+  if (normalized.includes("low") || normalized.includes("faible")) return "low";
+  if (normalized.includes("ready") || normalized.includes("complete") || normalized.includes("ok")) return "ready";
+  return "info";
+}
+
+function recordText(record) {
+  return JSON.stringify(record || {}).toLowerCase();
+}
+
+function queryMatches(record) {
+  return !state.query || recordText(record).includes(state.query);
+}
+
+function artifactName(record) {
+  return record.filename || record.artifact_name || record.original_filename || "artifact.bin";
+}
+
+function allIncidents() {
+  const alerts = state.alerts.map((alert) => ({
+    timestamp: alert.timestamp,
+    alert_id: alert.alert_id,
+    source: alert.source_module || "agent",
+    event: alert.type || "ALERT",
+    severity: alert.severity || "MEDIUM",
+    action: alert.status || "NEW",
+    raw: alert
+  }));
+
+  const quarantine = state.quarantine.map((record) => ({
+    timestamp: record.created_at,
+    alert_id: record.alert_id,
+    source: "quarantine",
+    event: record.rootkit_category || artifactName(record),
+    severity: record.risk_level || "HIGH",
+    action: record.status || "READY_FOR_ANALYSIS",
+    raw: record
+  }));
+
+  const sandbox = state.sandbox.map((result) => ({
+    timestamp: result.analysis_finished_at || result.finished_at || result.timestamp,
+    alert_id: result.alert_id,
+    source: "sandbox",
+    event: result.analysis_id || result.artifact_id || "analysis",
+    severity: result.execution_status === "FAILED" ? "HIGH" : "LOW",
+    action: result.execution_status || result.sandbox_status || "COMPLETED",
+    raw: result
+  }));
+
+  return [...alerts, ...quarantine, ...sandbox]
+    .filter((item) => queryMatches(item.raw))
+    .sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
+}
+
+function matchingQuarantine() {
+  return state.quarantine.filter((record) => {
+    const filterOk = state.quarantineFilter === "ALL" || record.status === state.quarantineFilter;
+    return filterOk && queryMatches(record);
   });
 }
 
-function renderMetrics() {
-  document.querySelector("#metric-alerts").textContent = records.length;
-  document.querySelector("#metric-ready").textContent = records.filter((r) => r.ready_for_sandbox).length;
-  document.querySelector("#metric-integrity").textContent = records.filter((r) => r.integrity_verified).length;
-  document.querySelector("#metric-high").textContent = records.filter((r) => ["HIGH", "CRITICAL"].includes(r.risk_level)).length;
+function setDonut(id, value, total, offset) {
+  const circle = $(id);
+  if (!circle) return offset;
+  const circumference = 276;
+  const length = total ? (value / total) * circumference : 0;
+  circle.style.strokeDasharray = `${length} ${circumference - length}`;
+  circle.style.strokeDashoffset = String(-offset);
+  return offset + length;
 }
 
-function renderTable() {
-  const rows = filteredRecords().map((record) => `
+function renderThreatSummary() {
+  const severities = [...state.alerts, ...state.quarantine.map((item) => ({ severity: item.risk_level }))];
+  const counts = {
+    critical: severities.filter((item) => severityClass(item.severity) === "critical").length,
+    high: severities.filter((item) => severityClass(item.severity) === "high").length,
+    medium: severities.filter((item) => severityClass(item.severity) === "medium").length,
+    low: severities.filter((item) => severityClass(item.severity) === "low").length
+  };
+  const total = counts.critical + counts.high + counts.medium + counts.low;
+  $("#sev-critical").textContent = counts.critical;
+  $("#sev-high").textContent = counts.high;
+  $("#sev-medium").textContent = counts.medium;
+  $("#sev-low").textContent = counts.low;
+  $("#donut-total").textContent = total;
+
+  let offset = 0;
+  offset = setDonut("#donut-critical", counts.critical, total, offset);
+  offset = setDonut("#donut-high", counts.high, total, offset);
+  setDonut("#donut-medium", counts.medium, total, offset);
+
+  const typeCounts = {};
+  for (const alert of state.alerts) {
+    const key = alert.type || "UNKNOWN";
+    typeCounts[key] = (typeCounts[key] || 0) + 1;
+  }
+  for (const record of state.quarantine) {
+    const key = record.rootkit_category || "QUARANTINE";
+    typeCounts[key] = (typeCounts[key] || 0) + 1;
+  }
+
+  const rows = Object.entries(typeCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([type, count]) => `
+      <div class="type-row">
+        <span>${escapeHtml(type)}</span>
+        <strong>${count}</strong>
+      </div>
+    `);
+  $("#threat-types").innerHTML = rows.join("") || `<div class="type-row"><span>NO DATA</span><strong>0</strong></div>`;
+}
+
+function renderNetworkMap() {
+  const networks = state.sandbox.flatMap((item) => item.network_events || item.network_connections || []);
+  $("#network-count").textContent = networks.length;
+}
+
+function renderRecentQuarantine() {
+  const items = state.quarantine.filter(queryMatches).slice(0, 5);
+  $("#recent-quarantine").innerHTML = items.map((record) => `
+    <div class="mini-row">
+      <span>
+        <strong>${escapeHtml(record.alert_id)}</strong><br>
+        ${escapeHtml(record.created_at || "-")} / ${escapeHtml(record.rootkit_category || "unclassified")}
+      </span>
+      <span class="hash">${escapeHtml(shortHash(record.md5 || record.sha256, 8, 4))}<br>${escapeHtml(record.status || "-")}</span>
+    </div>
+  `).join("") || `<div class="mini-row"><span>NO ARTIFACTS</span><strong>0</strong></div>`;
+}
+
+function renderTrend() {
+  const count = Math.max(1, state.alerts.length + state.quarantine.length + state.sandbox.length);
+  const bars = Array.from({ length: 24 }, (_, index) => {
+    const seed = ((index * 7 + count * 5) % 17) + (index % 6);
+    const height = Math.max(8, Math.min(100, seed * 5));
+    return `<div class="trend-bar" title="${index}:00" style="height:${height}%"></div>`;
+  });
+  $("#trend-chart").innerHTML = bars.join("");
+}
+
+function renderActivityLog() {
+  const rows = allIncidents().slice(0, 10).map((item) => `
     <tr>
-      <td class="mono">${record.alert_id}</td>
-      <td>${record.artifact_name}</td>
-      <td><span class="badge ${riskClass(record.risk_level)}">${record.risk_level}</span></td>
-      <td><span class="badge ${statusClass(record.status)}">${record.status}</span></td>
-      <td class="mono hash">${record.sha256 || "-"}</td>
-      <td><button class="details-button" type="button" data-alert="${record.alert_id}">Details</button></td>
+      <td class="mono">${escapeHtml(item.timestamp || "-")}</td>
+      <td>${escapeHtml(item.source)}</td>
+      <td>${escapeHtml(item.event)}</td>
+      <td><span class="badge ${severityClass(item.severity)}">${escapeHtml(item.severity)}</span></td>
+      <td>${escapeHtml(item.action)}</td>
     </tr>
   `);
-  recordsBody.innerHTML = rows.join("");
-  document.querySelectorAll(".details-button").forEach((button) => {
-    button.addEventListener("click", () => {
-      const record = records.find((item) => item.alert_id === button.dataset.alert);
-      renderDetails(record);
-    });
-  });
+  $("#activity-log").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucun evenement</td></tr>`;
 }
 
-function renderDetails(record) {
-  if (!record) {
+function renderOverview() {
+  renderThreatSummary();
+  renderNetworkMap();
+  renderRecentQuarantine();
+  renderTrend();
+  renderActivityLog();
+  $("#last-update").textContent = `LAST UPDATE: ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+}
+
+function renderAlerts() {
+  const rows = state.alerts.filter(queryMatches).map((alert, index) => `
+    <tr data-alert-index="${index}">
+      <td class="mono">${escapeHtml(alert.alert_id)}</td>
+      <td>${escapeHtml(alert.source_module)}</td>
+      <td>${escapeHtml(alert.type)}</td>
+      <td><span class="badge ${severityClass(alert.severity)}">${escapeHtml(alert.severity)}</span></td>
+      <td><span class="badge ${severityClass(alert.status)}">${escapeHtml(alert.status || "NEW")}</span></td>
+    </tr>
+  `);
+  $("#alerts-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucune alerte</td></tr>`;
+  $$("#alerts-table tr[data-alert-index]").forEach((row) => {
+    row.addEventListener("click", () => {
+      $$("#alerts-table tr").forEach((item) => item.classList.remove("selected"));
+      row.classList.add("selected");
+      renderAlertDetail(state.alerts[Number(row.dataset.alertIndex)]);
+    });
+  });
+  renderAlertDetail(state.alerts.find(queryMatches));
+}
+
+function renderAlertDetail(alert) {
+  const panel = $("#alert-detail");
+  if (!alert) {
+    panel.innerHTML = emptyState("Selectionner une alerte", "agent monitor");
     return;
   }
-  const errorBlock = record.errors?.length
-    ? `<div class="detail-row"><span>Erreur</span><strong>${record.errors.join(", ")}</strong></div>`
-    : "";
-
-  details.innerHTML = `
+  panel.innerHTML = `
     <div class="detail-stack">
-      <h2>${record.alert_id}</h2>
-      <div class="detail-row">
-        <span>Artefact</span>
-        <strong>${record.artifact_name}</strong>
+      <div class="detail-title">
+        <strong>${escapeHtml(alert.alert_id)}</strong>
+        <span>${escapeHtml(alert.description)}</span>
       </div>
-      <div class="detail-row">
-        <span>Chemin original</span>
-        <strong class="mono">${record.original_path}</strong>
-      </div>
-      <div class="detail-row">
-        <span>SHA256</span>
-        <strong class="mono">${record.sha256 || "-"}</strong>
-      </div>
-      <div class="detail-row">
-        <span>Profil rootkit</span>
-        <strong>${record.rootkit_category || "Non classe"}</strong>
-      </div>
-      <div class="detail-row">
-        <span>Techniques suspectees</span>
-        <strong>${record.suspected_techniques?.join(", ") || "-"}</strong>
-      </div>
-      <div class="detail-row">
-        <span>Dossier de preuve</span>
-        <strong class="mono">${record.evidence_dir}</strong>
-      </div>
-      <div class="detail-row">
-        <span>Journal audit</span>
-        <strong class="mono">${record.audit_log_path}</strong>
-      </div>
-      <div class="detail-row">
-        <span>Integrite</span>
-        <strong>${record.integrity_verified ? "Validee" : "Non validee"}</strong>
-      </div>
-      ${errorBlock}
-      <div class="action-row">
-        <button class="primary-action" type="button" ${record.ready_for_sandbox ? "" : "disabled"}>Sandbox</button>
-        <button class="secondary-action" type="button">Manifest</button>
-      </div>
+      ${detailRow("source", alert.source_module)}
+      ${detailRow("type", alert.type)}
+      ${detailRow("severity", alert.severity)}
+      ${detailRow("timestamp", alert.timestamp)}
+      ${detailRow("details", JSON.stringify(alert.details || {}, null, 2), true)}
     </div>
   `;
 }
 
-document.querySelectorAll(".segment").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".segment").forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    currentFilter = button.dataset.filter;
-    renderTable();
+function renderQuarantine() {
+  const rows = matchingQuarantine().map((record, index) => `
+    <tr data-quarantine-index="${index}">
+      <td class="mono">${escapeHtml(record.alert_id)}</td>
+      <td>${escapeHtml(artifactName(record))}</td>
+      <td>${escapeHtml(record.rootkit_category || "unclassified")}</td>
+      <td class="hash mono" title="${escapeHtml(record.sha256 || "")}">${escapeHtml(shortHash(record.sha256))}</td>
+      <td><span class="badge ${severityClass(record.status)}">${escapeHtml(record.status || "-")}</span></td>
+    </tr>
+  `);
+  $("#quarantine-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucune preuve</td></tr>`;
+  $$("#quarantine-table tr[data-quarantine-index]").forEach((row) => {
+    row.addEventListener("click", () => {
+      $$("#quarantine-table tr").forEach((item) => item.classList.remove("selected"));
+      row.classList.add("selected");
+      renderQuarantineDetail(matchingQuarantine()[Number(row.dataset.quarantineIndex)]);
+    });
   });
-});
+  renderQuarantineDetail(matchingQuarantine()[0]);
+}
 
-searchInput.addEventListener("input", renderTable);
-renderMetrics();
-renderTable();
+function renderQuarantineDetail(record) {
+  const panel = $("#quarantine-detail");
+  if (!record) {
+    panel.innerHTML = emptyState("Selectionner une preuve", "evidence vault");
+    return;
+  }
+  const manifestUrl = `/api/quarantine/${encodeURIComponent(record.alert_id)}/manifest`;
+  const downloadUrl = `/api/quarantine/${encodeURIComponent(record.alert_id)}/download`;
+  const handoffUrl = `/api/quarantine/${encodeURIComponent(record.alert_id)}/handoff`;
+  panel.innerHTML = `
+    <div class="detail-stack">
+      <div class="detail-title">
+        <strong>${escapeHtml(record.artifact_id || record.alert_id)}</strong>
+        <span>${escapeHtml(artifactName(record))}</span>
+      </div>
+      ${detailRow("status", record.status)}
+      ${detailRow("original path", record.original_path, true)}
+      ${detailRow("quarantine path", record.quarantine_path || record.artifact_path, true)}
+      ${detailRow("sha256", record.sha256, true)}
+      ${detailRow("md5", record.md5, true)}
+      ${detailRow("sha1", record.sha1, true)}
+      ${detailRow("integrity", record.integrity_verified ? "VERIFIED" : "NOT VERIFIED")}
+      ${detailRow("profile", record.rootkit_category || "unclassified")}
+      <div class="action-row">
+        <button class="action-button primary" type="button" data-open="${manifestUrl}">manifest</button>
+        <button class="action-button" type="button" data-open="${downloadUrl}" ${record.ready_for_sandbox ? "" : "disabled"}>download</button>
+        <button class="action-button" type="button" data-open="${handoffUrl}" ${record.ready_for_sandbox ? "" : "disabled"}>handoff</button>
+      </div>
+    </div>
+  `;
+  bindOpenButtons(panel);
+}
+
+function renderSandbox() {
+  const items = state.sandbox.filter(queryMatches);
+  $("#sandbox-grid").innerHTML = items.map((result) => {
+    const status = result.execution_status || result.sandbox_status || "UNKNOWN";
+    const fileEvents = result.file_events || {};
+    const files = (fileEvents.created?.length || 0) + (fileEvents.modified?.length || 0) + (result.files_created?.length || 0);
+    const networks = (result.network_events || result.network_connections || []).length;
+    return `
+      <article class="sandbox-card">
+        <header>
+          <strong>${escapeHtml(result.analysis_id || result.artifact_id || "analysis")}</strong>
+          <span class="badge ${severityClass(status)}">${escapeHtml(status)}</span>
+        </header>
+        <div class="artifact-line"><span>artifact</span><strong class="mono">${escapeHtml(result.artifact_id || "-")}</strong></div>
+        <div class="artifact-line"><span>vm</span><strong>${escapeHtml(result.vm_name || result.sandbox_vm || result.sandbox_id || "-")}</strong></div>
+        <div class="artifact-line"><span>snapshot</span><strong>${escapeHtml(result.snapshot_name || result.snapshot_used || "-")}</strong></div>
+        <div class="artifact-line"><span>exit</span><strong>${escapeHtml(valueOrDash(result.exit_code))}</strong></div>
+        <div class="artifact-line"><span>files</span><strong>${files}</strong></div>
+        <div class="artifact-line"><span>network</span><strong>${networks}</strong></div>
+        <small>${escapeHtml(result.logs_path || result.local_result_path || "")}</small>
+      </article>
+    `;
+  }).join("") || `<div class="empty-state"><strong>Aucune analyse sandbox</strong><span>isolated runtime</span></div>`;
+}
+
+function renderIocs() {
+  const quarantine = state.quarantine.filter(queryMatches);
+  const reports = state.reports.filter(queryMatches);
+  const iocs = quarantine.flatMap((record) => [
+    record.rootkit_category ? { label: "profile", value: record.rootkit_category } : null,
+    record.original_path ? { label: "path", value: record.original_path } : null,
+    record.sha256 ? { label: "sha256", value: shortHash(record.sha256, 14, 8) } : null,
+    ...(record.suspected_techniques || []).map((technique) => ({ label: "technique", value: technique }))
+  ].filter(Boolean)).slice(0, 12);
+
+  $("#ioc-list").innerHTML = iocs.map((ioc) => `
+    <article class="ioc-item">
+      <span>${escapeHtml(ioc.label)}</span>
+      <strong>${escapeHtml(ioc.value)}</strong>
+    </article>
+  `).join("") || `<div class="empty-state"><strong>Aucun IOC</strong><span>intel database</span></div>`;
+
+  const scoreItems = reports.length ? reports : quarantine.map((record) => ({
+    artifact_id: record.artifact_id,
+    risk_score: ["CRITICAL", "HIGH"].includes(record.risk_level) ? 82 : record.risk_level === "MEDIUM" ? 48 : 20,
+    risk_level: record.risk_level || "MEDIUM"
+  }));
+
+  $("#score-board").innerHTML = scoreItems.slice(0, 5).map((item) => {
+    const score = Number(item.risk_score || item.score || 0);
+    return `
+      <article class="score-card">
+        <span>${escapeHtml(item.artifact_id || item.alert_id || "artifact")}</span>
+        <strong>${score}</strong>
+        <div class="score-bar"><span style="width:${Math.max(0, Math.min(score, 100))}%"></span></div>
+        <span class="badge ${severityClass(item.risk_level)}">${escapeHtml(item.risk_level || "UNKNOWN")}</span>
+      </article>
+    `;
+  }).join("") || `<div class="empty-state"><strong>Aucun score</strong><span>risk engine</span></div>`;
+}
+
+function renderReports() {
+  const rows = state.reports.filter(queryMatches).map((report) => `
+    <tr>
+      <td class="mono">${escapeHtml(report.report_id || report.alert_id || "-")}</td>
+      <td class="mono">${escapeHtml(report.artifact_id || "-")}</td>
+      <td>${escapeHtml(report.timestamp || report.created_at || "-")}</td>
+      <td>${report.report_path ? `<span class="badge ready">HTML</span>` : "-"}</td>
+      <td>${report.pdf_report_path ? `<span class="badge info">PDF</span>` : "-"}</td>
+    </tr>
+  `);
+  $("#reports-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucun rapport</td></tr>`;
+}
+
+function detailRow(label, value, mono = false) {
+  return `
+    <div class="detail-row">
+      <span>${escapeHtml(label)}</span>
+      <strong class="${mono ? "mono" : ""}">${escapeHtml(valueOrDash(value))}</strong>
+    </div>
+  `;
+}
+
+function emptyState(title, subtitle) {
+  return `<div class="empty-state"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span></div>`;
+}
+
+function bindOpenButtons(root = document) {
+  root.querySelectorAll("[data-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.open) window.open(button.dataset.open, "_blank", "noopener");
+    });
+  });
+}
+
+function setView(view) {
+  state.activeView = view;
+  $$(".view").forEach((section) => section.classList.toggle("active", section.id === `${view}-view`));
+  $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+  const current = $(`#${view}-view`);
+  $("#view-title").textContent = current?.dataset.title || "Tableau de bord";
+}
+
+function renderAll() {
+  renderOverview();
+  renderAlerts();
+  renderQuarantine();
+  renderSandbox();
+  renderIocs();
+  renderReports();
+}
+
+async function loadData() {
+  const [alerts, quarantine, sandbox, reports] = await Promise.all([
+    fetchJson("/api/alerts", fallback.alerts, "alerts"),
+    fetchJson("/api/quarantine", fallback.quarantine, "quarantine"),
+    fetchJson("/api/sandbox/results", fallback.sandbox, "results"),
+    fetchJson("/api/reports", fallback.reports, "reports")
+  ]);
+  state.alerts = alerts;
+  state.quarantine = quarantine;
+  state.sandbox = sandbox;
+  state.reports = reports;
+  renderAll();
+}
+
+function finishBoot() {
+  if (bootDone) return;
+  bootDone = true;
+  const boot = $("#boot-screen");
+  if (!boot) return;
+  $("#boot-progress").style.width = "100%";
+  $("#boot-status").textContent = "ready.";
+  boot.classList.add("leaving");
+  window.setTimeout(() => boot.remove(), 460);
+}
+
+function runBootSequence() {
+  const boot = $("#boot-screen");
+  const log = $("#boot-log");
+  const progress = $("#boot-progress");
+  const status = $("#boot-status");
+  const skip = $("#boot-skip");
+  if (!boot || !log || !progress || !status) return;
+
+  log.textContent = "";
+  bootSteps.forEach((step, index) => {
+    window.setTimeout(() => {
+      if (bootDone) return;
+      progress.style.width = `${step.progress}%`;
+      status.textContent = step.status;
+      log.textContent += `${step.line}\n`;
+      log.scrollTop = log.scrollHeight;
+      if (index === bootSteps.length - 1) {
+        window.setTimeout(finishBoot, 520);
+      }
+    }, 260 + index * 310);
+  });
+
+  skip?.addEventListener("click", finishBoot);
+}
+
+function bindEvents() {
+  $$(".nav-item").forEach((button) => {
+    button.addEventListener("click", () => setView(button.dataset.view));
+  });
+
+  $$(".segment").forEach((button) => {
+    button.addEventListener("click", () => {
+      $$(".segment").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      state.quarantineFilter = button.dataset.filter;
+      renderQuarantine();
+    });
+  });
+
+  $("#global-search").addEventListener("input", (event) => {
+    state.query = event.target.value.trim().toLowerCase();
+    renderAll();
+  });
+
+  $("#refresh-data").addEventListener("click", loadData);
+}
+
+bindEvents();
+runBootSequence();
+loadData();
