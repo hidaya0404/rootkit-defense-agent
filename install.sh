@@ -37,8 +37,9 @@ apt update -q
 apt install -y python3 python3-pip git curl net-tools \
                inotify-tools auditd python3-venv
 
-pip3 install psutil watchdog requests flask \
-             flask-cors --break-system-packages
+pip3 install psutil watchdog requests flask flask-cors \
+             --break-system-packages \
+             --ignore-installed blinker werkzeug
 
 echo -e "${GREEN}✅ Dépendances installées${NC}"
 
