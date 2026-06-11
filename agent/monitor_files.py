@@ -42,16 +42,19 @@ def scan_suspicious_executables():
             for fname in os.listdir(directory):
                 fpath = os.path.join(directory, fname)
                 if os.path.isfile(fpath) and os.access(fpath, os.X_OK):
-                    alerts.append(build_alert(
+                    sha256 = hash_file(fpath)
+                    alert = build_alert(
                         module="file_monitor",
                         severity="HIGH",
                         alert_type="EXECUTABLE_IN_SUSPICIOUS_DIR",
                         description=f"Exécutable trouvé dans répertoire suspect : {fpath}",
                         details={
                             "path": fpath,
-                            "sha256": hash_file(fpath)
+                            "sha256": sha256,
+                            "needs_upload": True  # ← signal pour upload
                         }
-                    ))
+                    )
+                    alerts.append(alert)
     return alerts
 
 def scan_file_integrity():
@@ -68,7 +71,8 @@ def scan_file_integrity():
                 details={
                     "path": path,
                     "original_sha256": original_hash,
-                    "current_sha256": current_hash
+                    "current_sha256": current_hash,
+                    "needs_upload": True
                 }
             ))
     return alerts
