@@ -405,11 +405,18 @@ def get_sandbox_status(exit_code, stderr_text="", artifact_name=""):
     if exit_code == 124:
         return "TIMEOUT", "Analyse arretee par timeout"
 
-    if "Exec format error" in stderr_text or artifact_name.endswith(".ko"):
+    if artifact_name.endswith(".ko"):
         return (
             "COMPLETED",
             "Artefact non executable directement en user-space. "
-            "Probable module kernel Linux (.ko). Analyse sandbox terminee avec observation."
+            "Module kernel Linux (.ko) detecte. Analyse sandbox terminee avec observation."
+        )
+
+    if "Exec format error" in stderr_text:
+        return (
+            "COMPLETED",
+            "Artefact non executable directement en user-space. "
+            "Format binaire non compatible avec une execution directe. Analyse sandbox terminee avec observation."
         )
 
     return "FAILED", f"Analyse terminee avec exit_code={exit_code}"
@@ -531,12 +538,15 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None, demo_fast=Fal
             "execution_status": sandbox_status,
             "processes_created": behavior_summary["processes"],
             "persistence_indicators": [],
-            "risk_observations": [
-               "Artefact identifié comme module kernel Linux (.ko), non exécutable directement en user-space."
-            ] if (
-               artifact_info and artifact_info.get("filename", "").endswith(".ko")
-            ) or "Exec format error" in behavior_summary.get("stderr", "") else [],
-
+            "risk_observations": (
+                ["Artefact identifié comme module kernel Linux (.ko), non exécutable directement en user-space."]
+                if artifact_info and artifact_info.get("filename", "").endswith(".ko")
+                else (
+                    ["Artefact non exécutable directement en user-space : format binaire non compatible avec une exécution directe."]
+                    if "Exec format error" in behavior_summary.get("stderr", "")
+                    else []
+              )
+      ),
             "local_result_path": str(local_result_path),
         }
 
@@ -565,30 +575,37 @@ def send_result_to_backend(result):
     print(f"[+] Envoi resultat vers backend : {url}")
 
     behavior = result.get("behavior_summary", {})
-    is_kernel_module_observation = False
+    is_non_directly_executable = False
 
     if isinstance(behavior, dict):
         stderr_text = str(behavior.get("stderr", ""))
         artifact_name = str(result.get("artifact_name", ""))
 
-        is_kernel_module_observation = (
+        is_non_directly_executable = (
             result.get("execution_status") == "COMPLETED"
-            and (
-                "Exec format error" in stderr_text
-                or artifact_name.endswith(".ko")
-            )
+            and "Exec format error" in stderr_text
         )
 
-        if is_kernel_module_observation:
+        if artifact_name.endswith(".ko"):
+           artifact_type_text = "kernel_module"
+           observation_text = "Linux kernel module not directly executable in user-space"
+        elif is_non_directly_executable:
+           artifact_type_text = "non_directly_executable_binary"
+           observation_text = "Binary format not directly executable in user-space"
+        else:
+           artifact_type_text = "standard_user_space_artifact"
+           observation_text = "No special execution observation"
+
+        if is_non_directly_executable:
             behavior_summary_text = (
                 f"Sandbox analysis completed; "
                 f"artifact_execution=not_applicable_user_space; "
                 f"exit_code={behavior.get('exit_code')}; "
-                f"artifact_type=kernel_module; "
+                f"artifact_type={artifact_type_text}; "
                 f"files_created={len(behavior.get('files_created', []))}; "
                 f"files_modified={len(behavior.get('files_modified', []))}; "
                 f"network_connections={len(behavior.get('network_connections', []))}; "
-                f"observation=Linux kernel module not directly executable in user-space"
+                f"observation={observation_text}"
             )
         else:
             behavior_summary_text = (
@@ -603,11 +620,6 @@ def send_result_to_backend(result):
         behavior_summary_text = str(behavior)
 
     risk_observations = result.get("risk_observations", [])
-
-    if is_kernel_module_observation:
-        observation = "Artefact identifié comme module kernel Linux (.ko), non exécutable directement en user-space."
-        if observation not in risk_observations:
-            risk_observations.append(observation)
 
     m4_payload = {
         "artifact_id": result.get("artifact_id"),

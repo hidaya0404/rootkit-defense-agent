@@ -50,3 +50,14 @@ cloudflared-linux-amd64.deb
 
 sandbox/test_metadata.json
 
+
+# M3 sandbox generated/local files
+sandbox/results/
+sandbox/downloaded_artifacts/
+sandbox/auto_metadata/
+sandbox/processed_artifacts.json
+sandbox/m2_artifacts/
+sandbox/m2_metadata.json
+m2_to_m3_handoff/
+sandbox/sandbox_config.py
+sandbox/auto_metadata/
