@@ -289,24 +289,44 @@ def receive_quarantine_manifest(manifest: QuarantineManifest):
     return {
         "message": "M2 quarantine manifest received successfully",
         "artifact": manifest_dict
-    }
-
+   }
 
 @app.get("/api/quarantine/ready")
-def get_ready_for_analysis_artifacts():
+def get_ready_quarantine_artifacts():
     artifacts = load_json(QUARANTINE_FILE)
 
-    ready = [
-        a for a in artifacts
-        if a.get("status") == "READY_FOR_ANALYSIS"
-        or a.get("ready_for_sandbox") is True
-    ]
+    ready_artifacts = []
+
+    for artifact in artifacts:
+        is_ready = (
+            artifact.get("status") == "READY_FOR_ANALYSIS"
+            or artifact.get("ready_for_sandbox") is True
+        )
+
+        if is_ready:
+            artifact_id = artifact.get("artifact_id")
+
+            artifact["download_url"] = f"/api/quarantine/{artifact_id}/download"
+
+            ready_artifacts.append({
+                "artifact_id": artifact.get("artifact_id"),
+                "alert_id": artifact.get("alert_id"),
+                "filename": artifact.get("filename") or artifact.get("original_filename"),
+                "sha256": artifact.get("sha256"),
+                "download_url": artifact.get("download_url"),
+                "status": artifact.get("status", "READY_FOR_ANALYSIS"),
+                "integrity_verified": artifact.get("integrity_verified", False),
+                "ready_for_sandbox": artifact.get("ready_for_sandbox", False),
+                "quarantine_path": artifact.get("quarantine_path") or artifact.get("stored_path"),
+                "metadata_path": artifact.get("metadata_path"),
+                "hashes_path": artifact.get("hashes_path"),
+                "manifest_path": artifact.get("manifest_path")
+            })
 
     return {
-        "count": len(ready),
-        "artifacts": ready
+        "count": len(ready_artifacts),
+        "artifacts": ready_artifacts
     }
-
 
 # ============================================================
 # M4 Integration with M3 Sandbox Analysis
