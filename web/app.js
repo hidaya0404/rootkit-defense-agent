@@ -87,16 +87,13 @@ const state = {
   query: ""
 };
 
-const bootSteps = [
-  { progress: 8, status: "mounting hardened workspace...", line: "root@rda:~$ mount /opt/rootkit-defense --secure" },
-  { progress: 18, status: "loading kernel telemetry...", line: "[ OK ] hidden-process and module sensors online", module: "boot-m1" },
-  { progress: 32, status: "preserving quarantine evidence...", line: "[ OK ] evidence vault policy loaded", module: "boot-m2" },
-  { progress: 47, status: "verifying chain of custody...", line: "[ OK ] hash-before-copy/hash-after-copy controls active" },
-  { progress: 62, status: "starting sandbox handoff bridge...", line: "[ OK ] isolated analysis handoff ready", module: "boot-m3" },
-  { progress: 76, status: "loading IOC reporting engine...", line: "[ OK ] YARA/IOC scoring cache warmed", module: "boot-m4" },
-  { progress: 88, status: "checking dashboard API...", line: "[ OK ] /api/health responsive" },
-  { progress: 96, status: "arming operator console...", line: "[ OK ] live SOC dashboard armed" },
-  { progress: 100, status: "secure environment ready.", line: "[ READY ] press ENTER to open dashboard" }
+const fallbackBootChecks = [
+  {
+    id: "ui",
+    label: "dashboard api",
+    status: "FAIL",
+    line: "/api/boot/checks unavailable; real integration checks could not run"
+  }
 ];
 
 let bootDone = false;
@@ -543,7 +540,41 @@ function finishBoot() {
   window.setTimeout(() => boot.remove(), 460);
 }
 
-function runBootSequence() {
+function bootStatusClass(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "ok") return "ok";
+  if (normalized === "warn" || normalized === "warning") return "warn";
+  return "fail";
+}
+
+function bootStatusToken(status) {
+  const normalized = String(status || "").toUpperCase();
+  if (normalized === "OK") return "OK";
+  if (normalized === "WARN" || normalized === "WARNING") return "WARN";
+  return "FAIL";
+}
+
+function setBootModule(check) {
+  const moduleStatus = document.getElementById(`boot-${check.id}`);
+  if (!moduleStatus) return;
+  const token = bootStatusToken(check.status);
+  moduleStatus.textContent = `[ ${token} ]`;
+  moduleStatus.classList.remove("ok", "warn", "fail");
+  moduleStatus.classList.add(bootStatusClass(check.status));
+}
+
+async function fetchBootChecks() {
+  try {
+    const response = await fetch("/api/boot/checks", { cache: "no-store" });
+    if (!response.ok) throw new Error(String(response.status));
+    const payload = await response.json();
+    return Array.isArray(payload.checks) ? payload.checks : fallbackBootChecks;
+  } catch {
+    return fallbackBootChecks;
+  }
+}
+
+async function runBootSequence() {
   const boot = $("#boot-screen");
   const log = $("#boot-log");
   const progress = $("#boot-progress");
@@ -552,7 +583,29 @@ function runBootSequence() {
   const skip = $("#boot-skip");
   if (!boot || !log || !progress || !status) return;
 
-  log.textContent = "";
+  log.textContent = "root@rda:~$ ./rda-console --real-health-check\n";
+  status.textContent = "running real module checks...";
+
+  const checks = await fetchBootChecks();
+  const bootSteps = [
+    {
+      progress: 8,
+      status: "connecting to local dashboard API...",
+      line: "root@rda:~$ GET /api/boot/checks"
+    },
+    ...checks.map((check, index) => ({
+      progress: Math.min(92, 18 + index * Math.max(12, Math.floor(68 / Math.max(checks.length, 1)))),
+      status: `checking ${check.label || check.id}...`,
+      line: `[ ${bootStatusToken(check.status)} ] ${check.line || check.label || check.id}`,
+      check
+    })),
+    {
+      progress: 100,
+      status: "real checks completed.",
+      line: "[ READY ] press ENTER to open dashboard"
+    }
+  ];
+
   bootSteps.forEach((step, index) => {
     window.setTimeout(() => {
       if (bootDone) return;
@@ -561,12 +614,8 @@ function runBootSequence() {
       status.textContent = step.status;
       log.textContent += `${step.line}\n`;
       log.scrollTop = log.scrollHeight;
-      if (step.module) {
-        const moduleStatus = document.getElementById(step.module);
-        if (moduleStatus) {
-          moduleStatus.textContent = "[ OK ]";
-          moduleStatus.classList.add("ok");
-        }
+      if (step.check) {
+        setBootModule(step.check);
       }
       if (index === bootSteps.length - 1) {
         bootReady = true;

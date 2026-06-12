@@ -1473,6 +1473,14 @@ tbody tr.selected {
   color: var(--green);
 }
 
+.boot-modules strong.warn {
+  color: var(--amber);
+}
+
+.boot-modules strong.fail {
+  color: var(--red);
+}
+
 .boot-skip {
   border-color: rgba(255, 42, 42, .38);
   background: #090303;

@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
+import subprocess
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 
 from evidence_quarantine.backend_client import build_quarantine_manifest
 from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.quarantine_manager import QuarantineManager
 from evidence_quarantine.storage import read_json
+
+DEFAULT_M4_BACKEND_URL = "https://employers-competitors-printed-situated.trycloudflare.com"
 
 
 def default_web_dir() -> Path:
@@ -98,6 +103,169 @@ def load_reports() -> list[dict[str, object]]:
     return []
 
 
+def configured_m4_backend_url() -> str:
+    return os.getenv("ROOTKIT_DEFENSE_M4_URL", DEFAULT_M4_BACKEND_URL).rstrip("/")
+
+
+def load_remote_json(url: str, *, timeout: float = 5.0) -> tuple[dict[str, object] | list[object] | None, str | None]:
+    request = Request(url, headers={"Accept": "application/json"}, method="GET")
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return json.loads(body) if body else {}, None
+    except Exception as exc:  # network health check must return diagnostics, not crash the UI
+        return None, str(exc)
+
+
+def systemd_service_status(service_name: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", service_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    return (result.stdout or result.stderr).strip() or "unknown"
+
+
+def build_boot_checks(config: QuarantineConfig) -> dict[str, object]:
+    root = repo_root()
+    backend_url = configured_m4_backend_url()
+    checks: list[dict[str, object]] = []
+
+    agent_files = [
+        root / "agent" / "main.py",
+        root / "agent" / "monitor_processes.py",
+        root / "agent" / "monitor_kernel.py",
+        root / "agent" / "monitor_files.py",
+        root / "agent" / "monitor_network.py",
+    ]
+    service_state = systemd_service_status("rootkit-agent.service")
+    missing_agent_files = [str(path.relative_to(root)) for path in agent_files if not path.exists()]
+    alerts_count = len(load_alerts())
+    if service_state == "active":
+        m1_status = "OK"
+        m1_line = f"rootkit-agent.service active; {alerts_count} local alert(s) visible"
+    elif not missing_agent_files:
+        m1_status = "WARN"
+        m1_line = "agent modules installed; systemd service not active in this runtime"
+    else:
+        m1_status = "FAIL"
+        m1_line = "agent monitor files missing"
+    checks.append(
+        {
+            "id": "m1",
+            "label": "kernel monitor",
+            "status": m1_status,
+            "line": m1_line,
+            "details": {
+                "service_state": service_state,
+                "alerts_count": alerts_count,
+                "missing_files": missing_agent_files,
+            },
+        }
+    )
+
+    manager = QuarantineManager(config)
+    quarantine_records = manager.list_evidence()
+    quarantine_ready = [
+        record for record in quarantine_records
+        if record.get("status") == "READY_FOR_ANALYSIS"
+        and record.get("integrity_verified") is True
+        and record.get("ready_for_sandbox") is True
+    ]
+    m2_status = "OK" if config.quarantine_dir.exists() else "WARN"
+    checks.append(
+        {
+            "id": "m2",
+            "label": "quarantine vault",
+            "status": m2_status,
+            "line": (
+                f"evidence vault mounted; {len(quarantine_ready)} ready artifact(s), "
+                f"{len(quarantine_records)} total record(s)"
+            ),
+            "details": {
+                "storage_root": str(config.storage_root),
+                "index_file": str(config.index_file),
+                "ready_records": len(quarantine_ready),
+                "total_records": len(quarantine_records),
+            },
+        }
+    )
+
+    sandbox_payload, sandbox_error = load_remote_json(f"{backend_url}/api/sandbox/results")
+    local_sandbox_count = len(load_sandbox_results())
+    remote_sandbox_count = 0
+    if isinstance(sandbox_payload, dict):
+        remote_sandbox_count = int(sandbox_payload.get("count") or len(sandbox_payload.get("results") or []))
+    if sandbox_error:
+        m3_status = "WARN" if local_sandbox_count else "FAIL"
+        m3_line = f"sandbox endpoint unavailable; {local_sandbox_count} local result(s)"
+    else:
+        m3_status = "OK"
+        m3_line = f"M3 sandbox bridge reachable; {remote_sandbox_count} remote result(s)"
+    checks.append(
+        {
+            "id": "m3",
+            "label": "sandbox bridge",
+            "status": m3_status,
+            "line": m3_line,
+            "details": {
+                "backend_url": backend_url,
+                "remote_results": remote_sandbox_count,
+                "local_results": local_sandbox_count,
+                "error": sandbox_error,
+            },
+        }
+    )
+
+    home_payload, home_error = load_remote_json(f"{backend_url}/")
+    ready_payload, ready_error = load_remote_json(f"{backend_url}/api/quarantine/ready")
+    ready_count = 0
+    if isinstance(ready_payload, dict):
+        ready_count = int(ready_payload.get("count") or len(ready_payload.get("artifacts") or []))
+    if home_error or ready_error:
+        m4_status = "FAIL"
+        m4_line = "M4 backend unreachable"
+    else:
+        m4_status = "OK"
+        m4_line = f"M4 backend reachable; {ready_count} ready artifact(s)"
+    checks.append(
+        {
+            "id": "m4",
+            "label": "ioc reporting",
+            "status": m4_status,
+            "line": m4_line,
+            "details": {
+                "backend_url": backend_url,
+                "home": home_payload,
+                "ready_artifacts": ready_count,
+                "home_error": home_error,
+                "ready_error": ready_error,
+            },
+        }
+    )
+
+    checks.append(
+        {
+            "id": "ui",
+            "label": "dashboard api",
+            "status": "OK",
+            "line": "/api/boot/checks responsive; live SOC dashboard armed",
+            "details": {"web_dir": str(default_web_dir())},
+        }
+    )
+
+    return {
+        "status": "OK" if all(check["status"] == "OK" for check in checks) else "WARN",
+        "backend_url": backend_url,
+        "checks": checks,
+    }
+
+
 def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequestHandler]:
     web_root = web_dir.resolve()
 
@@ -112,8 +280,12 @@ def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequ
                         "status": "ok",
                         "service": "rootkit-defense-ui",
                         "modules": ["agent", "quarantine", "sandbox", "analyzer"],
+                        "m4_backend_url": configured_m4_backend_url(),
                     }
                 )
+                return
+            if parsed.path == "/api/boot/checks":
+                self._json(build_boot_checks(config))
                 return
             if parsed.path == "/api/alerts":
                 self._json(load_alerts())
