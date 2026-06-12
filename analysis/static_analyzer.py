@@ -9,6 +9,7 @@ from datetime import datetime
 
 from analysis.ioc_extractor import extract_iocs
 from analysis.scoring import calculate_risk_score
+from analysis.ai_remediation_advisor import build_ai_recommendation, flatten_ai_recommendations
 
 try:
     import yara
@@ -220,8 +221,6 @@ def analyze_file(file_path, artifact_id=None, alert_id=None):
         elf_info=elf_info
     )
 
-    recommendations = generate_recommendations(scoring["risk_level"])
-
     result = {
         "file_path": file_path,
         "file_type": file_type,
@@ -234,8 +233,17 @@ def analyze_file(file_path, artifact_id=None, alert_id=None):
         "risk_score": scoring["risk_score"],
         "risk_level": scoring["risk_level"],
         "risk_reasons": scoring["reasons"],
-        "recommendations": recommendations
     }
+
+    ai_recommendation = build_ai_recommendation(
+        {
+            "artifact_id": artifact_id,
+            "alert_id": alert_id,
+            "analysis": result,
+        }
+    )
+    result["ai_recommendation"] = ai_recommendation
+    result["recommendations"] = flatten_ai_recommendations(ai_recommendation)
 
     result["timeline"] = build_timeline(
         artifact_id=artifact_id,

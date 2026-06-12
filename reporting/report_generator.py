@@ -1,4 +1,6 @@
 from datetime import datetime
+import html as html_escape
+import json
 import uuid
 import os
 from reportlab.lib.pagesizes import A4
@@ -15,6 +17,48 @@ def build_executive_summary(analysis):
         "L’analyse statique a permis d’extraire des hash, des chaînes, des IOC, "
         "des résultats YARA et des recommandations de remédiation contrôlée."
     )
+
+
+def render_ai_recommendation(analysis):
+    ai = analysis.get("ai_recommendation") or {}
+    if not ai:
+        return "<p>Aucune recommandation AI disponible.</p>"
+
+    model = ai.get("model", {})
+    playbook = ai.get("selected_playbook", {})
+    rationale = ai.get("rationale", [])
+    actions = ai.get("recommended_actions", [])
+
+    output = f"""
+    <p><strong>Modele :</strong> {html_escape.escape(str(model.get("name", "RDA-Remediation-AI")))}
+       v{html_escape.escape(str(model.get("version", "1.0")))}
+       ({html_escape.escape(str(model.get("type", "local_playbook_ranker")))})</p>
+    <p><strong>API externe :</strong> {html_escape.escape(str(model.get("external_api", False)))}</p>
+    <p><strong>Playbook choisi :</strong> {html_escape.escape(str(playbook.get("title", "-")))}</p>
+    <p><strong>Confiance :</strong> {html_escape.escape(str(ai.get("confidence", "-")))}</p>
+    <p><strong>Decision :</strong> {html_escape.escape(str(ai.get("decision", "-")))}</p>
+    <h3>Raisons du choix AI</h3>
+    <ul>
+    """
+    for item in rationale:
+        output += f"<li>{html_escape.escape(str(item))}</li>"
+    output += "</ul><h3>Actions recommandees par AI</h3><ul>"
+    for action in actions[:12]:
+        output += f"<li>{html_escape.escape(str(action))}</li>"
+    output += "</ul>"
+    return output
+
+
+def render_pre(value):
+    if isinstance(value, (dict, list, tuple)):
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+    else:
+        text = str(value)
+    return html_escape.escape(text)
+
+
+def render_text(value):
+    return html_escape.escape(str(value))
 
 
 def generate_html_report(artifact, analysis):
@@ -68,58 +112,61 @@ def generate_html_report(artifact, analysis):
 
     <h2>2. Informations artefact</h2>
     <p><strong>Date :</strong> {datetime.utcnow().isoformat()}Z</p>
-    <p><strong>Artifact ID :</strong> {artifact.get("artifact_id")}</p>
-    <p><strong>Alert ID :</strong> {artifact.get("alert_id")}</p>
-    <p><strong>Nom original :</strong> {artifact.get("original_filename")}</p>
-    <p><strong>Chemin stocké :</strong> {artifact.get("stored_path")}</p>
+    <p><strong>Artifact ID :</strong> {render_text(artifact.get("artifact_id"))}</p>
+    <p><strong>Alert ID :</strong> {render_text(artifact.get("alert_id"))}</p>
+    <p><strong>Nom original :</strong> {render_text(artifact.get("original_filename"))}</p>
+    <p><strong>Chemin stocké :</strong> {render_text(artifact.get("stored_path"))}</p>
 
     <h2>3. Métadonnées</h2>
-    <pre>{analysis.get("metadata")}</pre>
+    <pre>{render_pre(analysis.get("metadata"))}</pre>
 
     <h2>4. Hash</h2>
-    <pre>{analysis.get("hashes")}</pre>
+    <pre>{render_pre(analysis.get("hashes"))}</pre>
 
     <h2>5. Type de fichier</h2>
-    <pre>{analysis.get("file_type")}</pre>
+    <pre>{render_pre(analysis.get("file_type"))}</pre>
 
     <h2>6. Analyse ELF</h2>
-    <pre>{analysis.get("elf_analysis")}</pre>
+    <pre>{render_pre(analysis.get("elf_analysis"))}</pre>
 
     <h2>7. IOC extraits</h2>
-    <pre>{analysis.get("iocs")}</pre>
+    <pre>{render_pre(analysis.get("iocs"))}</pre>
 
     <h2>8. Résultats YARA</h2>
-    <pre>{analysis.get("yara_matches")}</pre>
+    <pre>{render_pre(analysis.get("yara_matches"))}</pre>
 
     <h2>9. Score de risque</h2>
-    <p class="risk">{analysis.get("risk_score")} / 100 — {analysis.get("risk_level")}</p>
-    <pre>{analysis.get("risk_reasons")}</pre>
+    <p class="risk">{render_text(analysis.get("risk_score"))} / 100 — {render_text(analysis.get("risk_level"))}</p>
+    <pre>{render_pre(analysis.get("risk_reasons"))}</pre>
 
-    <h2>10. Recommandations de remédiation</h2>
+    <h2>10. Recommandation AI de remédiation</h2>
+    {render_ai_recommendation(analysis)}
+
+    <h2>11. Recommandations de remédiation</h2>
     <ul>
 """
 
     for rec in analysis.get("recommendations", []):
-        html += f"<li>{rec}</li>"
+        html += f"<li>{html_escape.escape(str(rec))}</li>"
 
     html += """
     </ul>
 
-    <h2>11. Timeline incident</h2>
+    <h2>12. Timeline incident</h2>
     <pre>
 """
 
-    html += str(analysis.get("timeline", []))
+    html += render_pre(analysis.get("timeline", []))
 
     html += """
     </pre>
 
-    <h2>12. Strings extraites</h2>
+    <h2>13. Strings extraites</h2>
     <pre>
 """
 
     for s in analysis.get("strings_sample", []):
-        html += s + "\n"
+        html += html_escape.escape(str(s)) + "\n"
 
     html += """
     </pre>
@@ -175,5 +222,11 @@ def generate_pdf_report(pdf_path, artifact, analysis, executive_summary):
     write_line("Recommandations :", 20)
     for rec in analysis.get("recommendations", []):
         write_line(f"- {rec}")
+
+    ai = analysis.get("ai_recommendation") or {}
+    if ai:
+        write_line("AI remediation advisor :", 20)
+        write_line(json.dumps(ai.get("selected_playbook", {}), ensure_ascii=False))
+        write_line(ai.get("decision", "-"))
 
     c.save()
