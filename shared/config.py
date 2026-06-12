@@ -1,5 +1,5 @@
 CONFIG = {
-    "backend_url": "https://tape-facts-understood-completely.trycloudflare.com",
+    "backend_url": "https://employers-competitors-printed-situated.trycloudflare.com",
     "alert_endpoint": "/api/alerts",
     "scan_interval": 30,
     "log_file": "logs/agent.log",
