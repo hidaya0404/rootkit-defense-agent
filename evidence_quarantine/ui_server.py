@@ -15,7 +15,7 @@ from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.quarantine_manager import QuarantineManager
 from evidence_quarantine.storage import read_json
 
-DEFAULT_M4_BACKEND_URL = "https://exp-queens-patterns-customs.trycloudflare.com"
+DEFAULT_M4_BACKEND_URL = "https://stopped-cet-musician-render.trycloudflare.com"
 
 
 def rootrap_storage_root() -> Path | None:
@@ -321,6 +321,7 @@ def build_boot_checks(config: QuarantineConfig) -> dict[str, object]:
     )
 
     manager = QuarantineManager(config)
+    m2_service_state = systemd_service_status("rootrap-m2-worker.service")
     quarantine_records = manager.list_evidence()
     quarantine_ready = [
         record for record in quarantine_records
@@ -328,17 +329,23 @@ def build_boot_checks(config: QuarantineConfig) -> dict[str, object]:
         and record.get("integrity_verified") is True
         and record.get("ready_for_sandbox") is True
     ]
-    m2_status = "OK" if config.quarantine_dir.exists() else "WARN"
+    if m2_service_state == "active" and config.quarantine_dir.exists():
+        m2_status = "OK"
+    elif config.quarantine_dir.exists():
+        m2_status = "WARN"
+    else:
+        m2_status = "FAIL"
     checks.append(
         {
             "id": "m2",
             "label": "quarantine vault",
             "status": m2_status,
             "line": (
-                f"evidence vault mounted; {len(quarantine_ready)} ready artifact(s), "
+                f"M2 worker={m2_service_state or 'unknown'}; {len(quarantine_ready)} ready artifact(s), "
                 f"{len(quarantine_records)} total record(s)"
             ),
             "details": {
+                "service_state": m2_service_state,
                 "storage_root": str(config.storage_root),
                 "index_file": str(config.index_file),
                 "ready_records": len(quarantine_ready),

@@ -10,7 +10,7 @@ GUEST_IP = "192.168.56.111"
 
 REMOTE_WORKDIR = "/home/asma/sandbox_run"
 
-BACKEND_URL = "http://127.0.0.1:5000"
+BACKEND_URL = "https://stopped-cet-musician-render.trycloudflare.com"
 QUARANTINE_ENDPOINT = "/api/quarantine"
 SANDBOX_RESULT_ENDPOINT = "/api/sandbox/results"
 

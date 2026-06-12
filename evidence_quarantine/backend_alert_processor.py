@@ -14,6 +14,7 @@ from evidence_quarantine.id_generator import sanitize_alert_id
 from evidence_quarantine.models import QuarantineRequest, RiskLevel, to_jsonable
 from evidence_quarantine.quarantine_manager import QuarantineManager
 from evidence_quarantine.storage import atomic_write_json, ensure_dir
+from evidence_quarantine.time_utils import utc_now
 
 
 def process_backend_ready_alerts(
@@ -23,6 +24,7 @@ def process_backend_ready_alerts(
     status: str = "ARTIFACT_READY",
     timeout: float = 10.0,
     send_manifest: bool = True,
+    skip_existing: bool = True,
 ) -> dict[str, Any]:
     """M2 workflow: pull M4 ready alerts, quarantine artifacts, send manifest."""
 
@@ -34,6 +36,7 @@ def process_backend_ready_alerts(
             alert,
             timeout=timeout,
             send_manifest=send_manifest,
+            skip_existing=skip_existing,
         )
         for alert in alerts
     ]
@@ -43,6 +46,7 @@ def process_backend_ready_alerts(
             "requested_status": status,
             "received_alerts": len(alerts),
             "processed_alerts": len(results),
+            "skipped_alerts": sum(1 for item in results if item.get("skipped") is True),
             "sent_manifests": sum(1 for item in results if item.get("manifest_sent") is True),
             "results": results,
         }
@@ -56,6 +60,7 @@ def _process_one_alert(
     *,
     timeout: float,
     send_manifest: bool,
+    skip_existing: bool,
 ) -> dict[str, Any]:
     alert_id = str(alert.get("alert_id") or alert.get("id") or "").strip()
     if not alert_id:
@@ -67,6 +72,39 @@ def _process_one_alert(
         }
 
     safe_alert_id = sanitize_alert_id(alert_id)
+    existing = manager.get_evidence(safe_alert_id) or manager.get_evidence(alert_id)
+    if skip_existing and existing and _already_ready(existing):
+        response = None
+        manifest_error = None
+        if send_manifest and not existing.get("backend_manifest_sent"):
+            try:
+                response = post_quarantine_manifest_payload(
+                    backend_url,
+                    build_quarantine_manifest(existing, download_url=_manifest_download_url(alert_id, alert)),
+                    timeout=timeout,
+                )
+                existing = dict(existing)
+                existing["backend_manifest_sent"] = True
+                existing["backend_manifest_sent_at"] = utc_now()
+                existing["backend_response"] = response
+                manager.repository.upsert(existing)
+            except BackendSyncError as exc:
+                manifest_error = str(exc)
+
+        return to_jsonable(
+            {
+                "success": manifest_error is None,
+                "skipped": manifest_error is None,
+                "stage": "already_quarantined",
+                "alert_id": existing.get("alert_id"),
+                "artifact_id": existing.get("artifact_id"),
+                "quarantine_status": existing.get("status"),
+                "manifest_sent": response is not None,
+                "backend_response": response,
+                "error": manifest_error,
+            }
+        )
+
     download_dir = manager.config.storage_root / "backend-downloads" / safe_alert_id
     ensure_dir(download_dir)
 
@@ -111,7 +149,7 @@ def _process_one_alert(
 
     backend_manifest_path = Path(quarantine_result.evidence_dir) / "backend_manifest.json"
     record["backend_manifest_path"] = str(backend_manifest_path)
-    manifest_payload = build_quarantine_manifest(record)
+    manifest_payload = build_quarantine_manifest(record, download_url=_manifest_download_url(alert_id, alert))
     atomic_write_json(backend_manifest_path, manifest_payload)
     manager.repository.upsert(record)
 
@@ -122,6 +160,12 @@ def _process_one_alert(
             response = post_quarantine_manifest_payload(backend_url, manifest_payload, timeout=timeout)
         except BackendSyncError as exc:
             manifest_error = str(exc)
+
+    if response is not None:
+        record["backend_manifest_sent"] = True
+        record["backend_manifest_sent_at"] = utc_now()
+        record["backend_response"] = response
+        manager.repository.upsert(record)
 
     return to_jsonable(
         {
@@ -143,6 +187,18 @@ def _process_one_alert(
 def _download_url_from_alert(alert: dict[str, Any]) -> str | None:
     value = alert.get("download_url") or alert.get("artifact_download_url")
     return str(value) if value else None
+
+
+def _manifest_download_url(alert_id: str, alert: dict[str, Any]) -> str:
+    return _download_url_from_alert(alert) or f"/api/artifacts/{alert_id}/download"
+
+
+def _already_ready(record: dict[str, Any]) -> bool:
+    return (
+        record.get("status") == "READY_FOR_ANALYSIS"
+        and record.get("integrity_verified") is True
+        and record.get("ready_for_sandbox") is True
+    )
 
 
 def _filename_from_alert(alert: dict[str, Any]) -> str | None:

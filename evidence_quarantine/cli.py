@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -120,12 +121,55 @@ def _process_backend_alerts(args: argparse.Namespace) -> int:
             status=args.status,
             timeout=args.timeout,
             send_manifest=not args.no_send_manifest,
+            skip_existing=not args.reprocess_existing,
         )
     except BackendSyncError as exc:
         _json_print({"error": str(exc), "backend_url": args.backend_url})
         return 2
     _json_print(payload)
     return 0
+
+
+def _auto_process_backend_alerts(args: argparse.Namespace) -> int:
+    manager = QuarantineManager(_config_from_args(args))
+    iteration = 0
+
+    while True:
+        iteration += 1
+        try:
+            payload = process_backend_ready_alerts(
+                manager,
+                args.backend_url,
+                status=args.status,
+                timeout=args.timeout,
+                send_manifest=not args.no_send_manifest,
+                skip_existing=not args.reprocess_existing,
+            )
+            payload["iteration"] = iteration
+            payload["worker"] = "m2-auto-quarantine"
+            _json_print(payload)
+        except BackendSyncError as exc:
+            _json_print(
+                {
+                    "worker": "m2-auto-quarantine",
+                    "iteration": iteration,
+                    "backend_url": args.backend_url,
+                    "error": str(exc),
+                }
+            )
+        except Exception as exc:  # keep the service alive and visible in journald
+            _json_print(
+                {
+                    "worker": "m2-auto-quarantine",
+                    "iteration": iteration,
+                    "backend_url": args.backend_url,
+                    "error": f"unexpected worker error: {exc}",
+                }
+            )
+
+        if args.once:
+            return 0
+        time.sleep(args.interval)
 
 
 def _demo(args: argparse.Namespace) -> int:
@@ -264,11 +308,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process_backend.add_argument("--timeout", type=float, default=10.0)
     process_backend.add_argument(
+        "--reprocess-existing",
+        action="store_true",
+        help="Re-download and re-quarantine alerts even if alert_id already exists locally",
+    )
+    process_backend.add_argument(
         "--no-send-manifest",
         action="store_true",
         help="Quarantine artifacts locally but do not POST the M2 manifest to M4",
     )
     process_backend.set_defaults(func=_process_backend_alerts)
+
+    auto_process_backend = subparsers.add_parser(
+        "auto-process-backend",
+        help="Continuously pull ARTIFACT_READY alerts from M4, quarantine them, and send manifests",
+    )
+    auto_process_backend.add_argument("--backend-url", required=True, help="M4 backend base URL")
+    auto_process_backend.add_argument(
+        "--status",
+        default="ARTIFACT_READY",
+        help="Alert status to pull from M4",
+    )
+    auto_process_backend.add_argument("--interval", type=float, default=15.0, help="Polling interval in seconds")
+    auto_process_backend.add_argument("--timeout", type=float, default=10.0)
+    auto_process_backend.add_argument("--once", action="store_true", help="Run one polling iteration and exit")
+    auto_process_backend.add_argument(
+        "--reprocess-existing",
+        action="store_true",
+        help="Re-download and re-quarantine alerts even if alert_id already exists locally",
+    )
+    auto_process_backend.add_argument(
+        "--no-send-manifest",
+        action="store_true",
+        help="Quarantine artifacts locally but do not POST the M2 manifest to M4",
+    )
+    auto_process_backend.set_defaults(func=_auto_process_backend_alerts)
 
     demo = subparsers.add_parser("demo", help="Create a benign sample and quarantine it")
     demo.add_argument("--alert-id")

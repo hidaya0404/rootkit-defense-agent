@@ -8,9 +8,10 @@ LOG_DIR="${ROOTRAP_LOG_DIR:-/var/log/rootrap}"
 CONFIG_DIR="${ROOTRAP_CONFIG_DIR:-/etc/rootrap}"
 UI_HOST="${ROOTRAP_HOST:-0.0.0.0}"
 UI_PORT="${ROOTRAP_PORT:-8081}"
-M4_URL="${ROOTKIT_DEFENSE_M4_URL:-https://exp-queens-patterns-customs.trycloudflare.com}"
+M4_URL="${ROOTKIT_DEFENSE_M4_URL:-https://stopped-cet-musician-render.trycloudflare.com}"
 REMOTE_DATA="${ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA:-0}"
 INSTALL_LOG="${ROOTRAP_INSTALL_LOG:-/var/log/rootrap-install.log}"
+M2_POLL_INTERVAL="${ROOTRAP_M2_POLL_INTERVAL:-15}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -95,6 +96,7 @@ ROOTRAP_BASELINE_DIR=$INSTALL_DIR/shared
 ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA=$REMOTE_DATA
 ROOTKIT_DEFENSE_STORAGE=$STATE_DIR
 ROOTKIT_DEFENSE_M4_URL=$M4_URL
+ROOTRAP_M2_POLL_INTERVAL=$M2_POLL_INTERVAL
 PYTHONPATH=$INSTALL_DIR
 PYTHONUNBUFFERED=1
 EOF
@@ -242,8 +244,8 @@ install_systemd_units() {
   section "Installing services"
   log "Installing systemd services..."
 
-  systemctl stop roottrap-agent.service roottrap-backend.service 2>/dev/null || true
-  systemctl disable roottrap-agent.service roottrap-backend.service 2>/dev/null || true
+  systemctl stop rootrap-m2-worker.service roottrap-agent.service roottrap-backend.service 2>/dev/null || true
+  systemctl disable rootrap-m2-worker.service roottrap-agent.service roottrap-backend.service 2>/dev/null || true
 
   cat > /etc/systemd/system/rootrap-ui.service <<EOF
 [Unit]
@@ -285,10 +287,31 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
+  cat > /etc/systemd/system/rootrap-m2-worker.service <<EOF
+[Unit]
+Description=RootRAP M2 Automatic Quarantine Worker
+After=network-online.target rootrap-ui.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+EnvironmentFile=$CONFIG_DIR/rootrap.env
+ExecStart=$INSTALL_DIR/.venv/bin/python -m evidence_quarantine --storage-root $STATE_DIR auto-process-backend --backend-url $M4_URL --interval $M2_POLL_INTERVAL --status ARTIFACT_READY
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   systemctl daemon-reload
-  systemctl enable rootrap-ui.service rootrap-agent.service >/dev/null
+  systemctl enable rootrap-ui.service rootrap-agent.service rootrap-m2-worker.service >/dev/null
   systemctl restart rootrap-ui.service
   systemctl restart rootrap-agent.service
+  systemctl restart rootrap-m2-worker.service
   wait_for_dashboard
   ok "Services installed and started"
 }
@@ -340,6 +363,7 @@ print_summary() {
   echo "  rootrap url"
   echo "  rootrap logs ui"
   echo "  rootrap logs agent"
+  echo "  rootrap logs m2"
   echo "  rootrap restart"
   echo "  rootrap quarantine demo"
   echo ""

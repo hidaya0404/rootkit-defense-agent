@@ -1,20 +1,26 @@
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urljoin
 
 import requests
 
-from sandbox_config import BACKEND_URL
+try:
+    from sandbox_config import BACKEND_URL as CONFIG_BACKEND_URL
+except ImportError:
+    CONFIG_BACKEND_URL = "https://stopped-cet-musician-render.trycloudflare.com"
 
 
 READY_ENDPOINT = "/api/quarantine/ready"
 PROCESSED_FILE = Path("sandbox/processed_artifacts.json")
 DOWNLOAD_DIR = Path("sandbox/downloaded_artifacts")
 METADATA_DIR = Path("sandbox/auto_metadata")
+DEFAULT_BACKEND_URL = os.getenv("ROOTKIT_DEFENSE_M4_URL", CONFIG_BACKEND_URL).rstrip("/")
 
 
 def load_processed():
@@ -39,8 +45,8 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def get_ready_artifacts():
-    url = BACKEND_URL.rstrip("/") + READY_ENDPOINT
+def get_ready_artifacts(backend_url):
+    url = backend_url.rstrip("/") + READY_ENDPOINT
     print(f"[+] Verification artefacts prets : {url}")
 
     response = requests.get(url, timeout=10)
@@ -50,13 +56,16 @@ def get_ready_artifacts():
     return data.get("artifacts", [])
 
 
-def download_artifact(artifact):
+def download_artifact(artifact, backend_url):
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     artifact_id = artifact["artifact_id"]
     download_url = artifact["download_url"]
 
-    url = BACKEND_URL.rstrip("/") + download_url
+    url = download_url if download_url.startswith(("http://", "https://")) else urljoin(
+        backend_url.rstrip("/") + "/",
+        download_url.lstrip("/")
+    )
     local_path = DOWNLOAD_DIR / f"{artifact_id}.bin"
 
     print(f"[+] Telechargement artefact : {artifact_id}")
@@ -126,9 +135,9 @@ def run_vmware_orchestrator(metadata_path, artifact_path):
     return result.returncode
 
 
-def process_once():
+def process_once(backend_url):
     processed = load_processed()
-    artifacts = get_ready_artifacts()
+    artifacts = get_ready_artifacts(backend_url)
 
     print(f"[+] Nombre artefacts prets : {len(artifacts)}")
 
@@ -147,7 +156,7 @@ def process_once():
             continue
 
         try:
-            artifact_path = download_artifact(artifact)
+            artifact_path = download_artifact(artifact, backend_url)
             metadata_path = create_metadata_file(artifact)
 
             code = run_vmware_orchestrator(metadata_path, artifact_path)
@@ -165,19 +174,25 @@ def process_once():
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--backend-url",
+        default=DEFAULT_BACKEND_URL,
+        help="M4 backend URL, default from ROOTKIT_DEFENSE_M4_URL or sandbox_config.py",
+    )
     parser.add_argument("--once", action="store_true", help="Executer une seule verification")
     parser.add_argument("--interval", type=int, default=30, help="Intervalle polling en secondes")
     args = parser.parse_args()
 
     if args.once:
-        process_once()
+        process_once(args.backend_url)
         return
 
     print("[+] M3 Auto Worker demarre")
     print("[+] Mode automatique : GET ready -> download -> VMware -> POST M4")
+    print(f"[+] Backend M4 : {args.backend_url}")
 
     while True:
-        process_once()
+        process_once(args.backend_url)
         time.sleep(args.interval)
 
 

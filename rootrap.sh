@@ -130,9 +130,11 @@ Usage:
   rootrap status             Show service and dashboard health
   rootrap url                Print dashboard IP and port
   rootrap serve              Run the dashboard in the foreground
-  rootrap logs [ui|agent]    Follow service logs
+  rootrap logs [ui|agent|m2] Follow service logs
+  rootrap logs m2            Follow automatic M2 worker logs
   rootrap alerts             Print local M1 alerts
   rootrap quarantine <args>  Run M2 quarantine CLI commands
+  rootrap m2-once            Pull M4 ARTIFACT_READY alerts once
   rootrap demo               Create a benign demo artifact in quarantine
   rootrap simulate-rootkit   Create safe rootkit-like lab artifacts
   rootrap diagnose           Show quick troubleshooting output
@@ -152,7 +154,7 @@ shift || true
 
 case "$cmd" in
   start)
-    sudo_cmd systemctl start rootrap-ui.service rootrap-agent.service
+    sudo_cmd systemctl start rootrap-ui.service rootrap-agent.service rootrap-m2-worker.service
     if ! wait_health; then
       echo -e "${YELLOW}[!] UI service started, but local API is not reachable yet.${NC}"
       echo "    Run: rootrap logs ui"
@@ -160,11 +162,11 @@ case "$cmd" in
     print_url
     ;;
   stop)
-    sudo_cmd systemctl stop rootrap-ui.service rootrap-agent.service
+    sudo_cmd systemctl stop rootrap-ui.service rootrap-agent.service rootrap-m2-worker.service
     echo -e "${GREEN}${APP_NAME} stopped${NC}"
     ;;
   restart)
-    sudo_cmd systemctl restart rootrap-ui.service rootrap-agent.service
+    sudo_cmd systemctl restart rootrap-ui.service rootrap-agent.service rootrap-m2-worker.service
     if ! wait_health; then
       echo -e "${YELLOW}[!] UI service restarted, but local API is not reachable yet.${NC}"
       echo "    Run: rootrap logs ui"
@@ -180,6 +182,8 @@ case "$cmd" in
     service_status rootrap-ui.service
     echo -n "  Agent service  : "
     service_status rootrap-agent.service
+    echo -n "  M2 worker      : "
+    service_status rootrap-m2-worker.service
     echo -n "  Health         : "
     health_check
     echo -e "  ${CYAN}App dir        :${NC} $APP_DIR"
@@ -196,11 +200,12 @@ case "$cmd" in
     ;;
   logs)
     target="${1:-ui}"
-    if [ "$target" = "agent" ]; then
-      sudo_cmd journalctl -u rootrap-agent.service -f
-    else
-      sudo_cmd journalctl -u rootrap-ui.service -f
-    fi
+    case "$target" in
+      agent) sudo_cmd journalctl -u rootrap-agent.service -f ;;
+      m2|worker) sudo_cmd journalctl -u rootrap-m2-worker.service -f ;;
+      ui) sudo_cmd journalctl -u rootrap-ui.service -f ;;
+      *) echo "Unknown log target: $target (use ui|agent|m2)" >&2; exit 2 ;;
+    esac
     ;;
   alerts)
     alerts_file="${ROOTRAP_PENDING_ALERTS_FILE:-$LOG_DIR/pending_alerts.jsonl}"
@@ -214,13 +219,23 @@ case "$cmd" in
     echo -e "${BOLD}${BLUE}${APP_NAME} diagnostics${NC}"
     echo ""
     echo "Services:"
-    systemctl --no-pager --full status rootrap-ui.service rootrap-agent.service || true
+    systemctl --no-pager --full status rootrap-ui.service rootrap-agent.service rootrap-m2-worker.service || true
     echo ""
     echo "Listening ports:"
     ss -ltnp 2>/dev/null | grep ":${PORT}" || true
     echo ""
     echo "UI logs:"
     sudo_cmd journalctl -u rootrap-ui.service -n 40 --no-pager || true
+    echo ""
+    echo "M2 worker logs:"
+    sudo_cmd journalctl -u rootrap-m2-worker.service -n 40 --no-pager || true
+    ;;
+  m2-once)
+    run_evidence_quarantine auto-process-backend \
+      --backend-url "${ROOTKIT_DEFENSE_M4_URL:-https://stopped-cet-musician-render.trycloudflare.com}" \
+      --interval "${ROOTRAP_M2_POLL_INTERVAL:-15}" \
+      --status ARTIFACT_READY \
+      --once
     ;;
   quarantine)
     if [ "$#" -eq 0 ]; then
@@ -244,11 +259,11 @@ case "$cmd" in
     ;;
   uninstall)
     echo -e "${YELLOW}Removing ${APP_NAME} from this machine...${NC}"
-    sudo_cmd systemctl stop rootrap-ui.service rootrap-agent.service 2>/dev/null || true
-    sudo_cmd systemctl disable rootrap-ui.service rootrap-agent.service 2>/dev/null || true
+    sudo_cmd systemctl stop rootrap-ui.service rootrap-agent.service rootrap-m2-worker.service 2>/dev/null || true
+    sudo_cmd systemctl disable rootrap-ui.service rootrap-agent.service rootrap-m2-worker.service 2>/dev/null || true
     sudo_cmd systemctl stop roottrap-agent.service roottrap-backend.service 2>/dev/null || true
     sudo_cmd systemctl disable roottrap-agent.service roottrap-backend.service 2>/dev/null || true
-    sudo_cmd rm -f /etc/systemd/system/rootrap-ui.service /etc/systemd/system/rootrap-agent.service
+    sudo_cmd rm -f /etc/systemd/system/rootrap-ui.service /etc/systemd/system/rootrap-agent.service /etc/systemd/system/rootrap-m2-worker.service
     sudo_cmd rm -f /etc/systemd/system/roottrap-agent.service /etc/systemd/system/roottrap-backend.service
     sudo_cmd rm -f /usr/local/bin/rootrap /usr/local/bin/roottrap
     sudo_cmd rm -rf "$APP_DIR" "$STATE_DIR" "$LOG_DIR" /etc/rootrap

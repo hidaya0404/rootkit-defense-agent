@@ -15,6 +15,18 @@ sudo ./install.sh
 
 Le script installe l'outil dans `/opt/rootrap`, cree un environnement Python isole, installe la commande systeme `rootrap`, demarre l'agent Linux et expose le dashboard web.
 
+Il demarre aussi `rootrap-m2-worker.service`, qui automatise la liaison:
+
+```text
+M4 /api/alerts?status=ARTIFACT_READY
+  -> M2 telecharge l'artefact
+  -> M2 met en quarantaine
+  -> M2 verifie les hash
+  -> M2 genere manifest.json
+  -> M2 POST /api/quarantine/manifest vers M4
+  -> M3 peut prendre l'artefact via /api/quarantine/ready
+```
+
 Les donnees affichees par defaut sont propres a la machine installee:
 
 ```text
@@ -44,6 +56,8 @@ rootrap url
 rootrap restart
 rootrap logs ui
 rootrap logs agent
+rootrap logs m2
+rootrap m2-once
 rootrap diagnose
 rootrap quarantine list
 rootrap quarantine demo

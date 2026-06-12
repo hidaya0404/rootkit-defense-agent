@@ -258,6 +258,7 @@ class QuarantineManifest(BaseModel):
     metadata_path: Optional[str] = None
     hashes_path: Optional[str] = None
     manifest_path: Optional[str] = None
+    download_url: Optional[str] = None
     rootkit_category: Optional[str] = None
     status: str = "READY_FOR_ANALYSIS"
     integrity_verified: bool = True
@@ -309,7 +310,7 @@ def get_ready_quarantine_artifacts():
         if is_ready:
             artifact_id = artifact.get("artifact_id")
 
-            artifact["download_url"] = f"/api/quarantine/{artifact_id}/download"
+            artifact["download_url"] = artifact.get("download_url") or f"/api/quarantine/{artifact_id}/download"
 
             ready_artifacts.append({
                 "artifact_id": artifact.get("artifact_id"),

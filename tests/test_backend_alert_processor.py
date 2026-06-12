@@ -62,6 +62,7 @@ class BackendAlertProcessorTest(unittest.TestCase):
                 )
 
             self.assertEqual(summary["processed_alerts"], 1)
+            self.assertEqual(summary["skipped_alerts"], 0)
             self.assertEqual(summary["sent_manifests"], 1)
             self.assertTrue(summary["results"][0]["success"])
 
@@ -77,9 +78,32 @@ class BackendAlertProcessorTest(unittest.TestCase):
             self.assertEqual(manifest["source_alert_status"], "ARTIFACT_READY")
             self.assertEqual(manifest["original_path"], "/tmp/rk_demo.ko")
             self.assertEqual(manifest["hashes"]["sha256"], record["sha256"])
+            self.assertEqual(manifest["download_url"], "/api/artifacts/ALT-M4-READY-0001/download")
 
             saved_manifest = json.loads(Path(record["backend_manifest_path"]).read_text(encoding="utf-8"))
             self.assertEqual(saved_manifest["alert_id"], "ALT-M4-READY-0001")
+
+            sent_manifests.clear()
+            with patch(
+                "evidence_quarantine.backend_alert_processor.get_ready_alerts",
+                side_effect=fake_get_ready_alerts,
+            ), patch(
+                "evidence_quarantine.backend_alert_processor.download_backend_artifact",
+                side_effect=fake_download_backend_artifact,
+            ), patch(
+                "evidence_quarantine.backend_alert_processor.post_quarantine_manifest_payload",
+                side_effect=fake_post_quarantine_manifest_payload,
+            ):
+                second_summary = process_backend_ready_alerts(
+                    manager,
+                    "https://m4.example.test",
+                    status="ARTIFACT_READY",
+                )
+
+            self.assertEqual(second_summary["processed_alerts"], 1)
+            self.assertEqual(second_summary["skipped_alerts"], 1)
+            self.assertEqual(second_summary["sent_manifests"], 0)
+            self.assertTrue(second_summary["results"][0]["skipped"])
 
 
 if __name__ == "__main__":
