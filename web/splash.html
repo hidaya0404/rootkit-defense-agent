@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rootkit Defense Agent</title>
+  <link rel="stylesheet" href="/static/splash.css" />
+</head>
+<body>
+  <canvas id="particles"></canvas>
+
+  <div class="scanline"></div>
+  <div class="vignette"></div>
+  <div class="grid"></div>
+
+  <main class="splash">
+    <section class="hero">
+      <div class="logo-shell">
+        <div class="ring ring-one"></div>
+        <div class="ring ring-two"></div>
+        <div class="scan-orbit"></div>
+        <img src="/static/logo.png" alt="Rootkit Defense Agent Logo" class="logo" />
+      </div>
+
+      <h1 class="title">
+        ROOTKIT <span>DEFENSE</span> AGENT
+      </h1>
+
+      <p class="subtitle">
+        Ethical Linux Threat Detection & Incident Response Platform
+      </p>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="dot red"></span>
+          <span class="dot dark"></span>
+          <span class="dot dark"></span>
+          <span class="terminal-title">rda-secure-console</span>
+        </div>
+
+        <div class="terminal-body">
+          <p><span class="prompt">root@rda:~$</span> <span id="terminalText">initializing defensive kernel monitor</span><span class="cursor">_</span></p>
+        </div>
+      </div>
+
+      <div class="progress-area">
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+          <div class="progress-glow" id="progressGlow"></div>
+        </div>
+        <span id="progressPercent">0%</span>
+      </div>
+
+      <div class="modules">
+        <div class="module">
+          <span class="module-name">M1 Agent Detection</span>
+          <span class="module-status" id="m1">[ WAIT ]</span>
+        </div>
+        <div class="module">
+          <span class="module-name">M2 Quarantine Evidence</span>
+          <span class="module-status" id="m2">[ WAIT ]</span>
+        </div>
+        <div class="module">
+          <span class="module-name">M3 Sandbox Analysis</span>
+          <span class="module-status" id="m3">[ WAIT ]</span>
+        </div>
+        <div class="module">
+          <span class="module-name">M4 IOC Reporting</span>
+          <span class="module-status" id="m4">[ WAIT ]</span>
+        </div>
+      </div>
+
+      <button id="enterBtn" class="launch-btn">
+        Launch Console
+      </button>
+
+      <p class="hint" id="hint">Press Enter when system is ready</p>
+    </section>
+  </main>
+
+  <script src="/static/splash.js"></script>
+</body>
+</html>
