@@ -50,6 +50,13 @@ def load_ui_records(config: QuarantineConfig) -> list[dict[str, object]]:
         item = dict(record)
         metadata_path = item.get("metadata_path")
         metadata = read_json(Path(str(metadata_path)), default={}) if metadata_path else {}
+        if isinstance(metadata, dict):
+            item.setdefault("detection_reason", metadata.get("detection_reason"))
+            item.setdefault("detected_at", metadata.get("detected_at"))
+            item.setdefault("risk_level", metadata.get("risk_level"))
+            item.setdefault("tags", metadata.get("tags", []))
+            item.setdefault("file_type", metadata.get("file_type"))
+            item.setdefault("size_bytes", metadata.get("size_bytes"))
         profile = metadata.get("rootkit_profile") if isinstance(metadata, dict) else None
         if isinstance(profile, dict):
             item.setdefault("rootkit_category", profile.get("category"))
@@ -98,6 +105,54 @@ def load_alerts() -> list[dict[str, object]]:
         if alerts:
             return alerts
     return []
+
+
+def alert_from_quarantine_record(record: dict[str, object]) -> dict[str, object]:
+    category = str(record.get("rootkit_category") or "quarantined_artifact")
+    risk_level = str(record.get("risk_level") or "MEDIUM")
+    status = str(record.get("status") or "READY_FOR_ANALYSIS")
+    filename = record.get("filename") or record.get("artifact_name") or record.get("original_filename")
+    description = record.get("detection_reason") or f"Quarantined artifact ready for analysis: {filename or category}"
+
+    return {
+        "alert_id": record.get("alert_id"),
+        "artifact_id": record.get("artifact_id"),
+        "timestamp": record.get("detected_at") or record.get("created_at"),
+        "source_module": record.get("source_module") or "m2-quarantine",
+        "type": category,
+        "severity": risk_level,
+        "status": status,
+        "description": description,
+        "derived_from_quarantine": True,
+        "details": {
+            "artifact_id": record.get("artifact_id"),
+            "filename": filename,
+            "original_path": record.get("original_path"),
+            "quarantine_path": record.get("quarantine_path") or record.get("artifact_path"),
+            "sha256": record.get("sha256"),
+            "md5": record.get("md5"),
+            "sha1": record.get("sha1"),
+            "rootkit_category": category,
+            "suspected_techniques": record.get("suspected_techniques", []),
+            "integrity_verified": record.get("integrity_verified"),
+            "ready_for_sandbox": record.get("ready_for_sandbox"),
+            "tags": record.get("tags", []),
+        },
+    }
+
+
+def load_dashboard_alerts(config: QuarantineConfig) -> list[dict[str, object]]:
+    alerts = load_alerts()
+    seen_alert_ids = {str(alert.get("alert_id")) for alert in alerts if alert.get("alert_id")}
+
+    for record in load_ui_records(config):
+        alert_id = record.get("alert_id")
+        if not alert_id or str(alert_id) in seen_alert_ids:
+            continue
+        alerts.append(alert_from_quarantine_record(record))
+        seen_alert_ids.add(str(alert_id))
+
+    return alerts
 
 
 def load_sandbox_results() -> list[dict[str, object]]:
@@ -296,7 +351,7 @@ def build_boot_checks(config: QuarantineConfig) -> dict[str, object]:
     ]
     service_state = systemd_service_status("rootrap-agent.service") or systemd_service_status("rootkit-agent.service")
     missing_agent_files = [str(path.relative_to(root)) for path in agent_files if not path.exists()]
-    alerts_count = len(load_alerts())
+    alerts_count = len(load_dashboard_alerts(config))
     if service_state == "active":
         m1_status = "OK"
         m1_line = f"rootrap-agent.service active; {alerts_count} local alert(s) visible"
@@ -446,7 +501,7 @@ def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequ
                 self._json(build_boot_checks(config))
                 return
             if parsed.path == "/api/alerts":
-                self._json(load_alerts())
+                self._json(load_dashboard_alerts(config))
                 return
             if parsed.path == "/api/quarantine":
                 self._json(load_ui_records(config))
