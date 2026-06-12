@@ -1,13 +1,5 @@
-<<<<<<< HEAD
-=======
-from pathlib import Path
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, UploadFile, File, Form, HTTPException, Query
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
 from datetime import datetime
+import hashlib
 import json
 import os
 import shutil
@@ -40,6 +32,9 @@ REPORTS_FILE = os.path.join(DATA_DIR, "reports.json")
 UPLOAD_QUARANTINE_DIR = PROJECT_ROOT / "uploads" / "quarantine"
 GENERATED_REPORTS_DIR = PROJECT_ROOT / "reports" / "generated"
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+ROOTRAP_QUARANTINE_DIR = Path(
+    os.getenv("ROOTRAP_M4_QUARANTINE_DIR", "/var/lib/rootrap/quarantine")
+)
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(UPLOAD_QUARANTINE_DIR, exist_ok=True)
@@ -83,6 +78,152 @@ def resolve_local_path(path_value):
         path = PROJECT_ROOT / path
 
     return path
+
+
+def calculate_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def canonical_quarantine_download_url(artifact_id: str) -> str:
+    return f"/api/quarantine/{artifact_id}/download"
+
+
+def source_download_url(artifact: dict[str, Any]) -> str | None:
+    artifact_id = artifact.get("artifact_id")
+    value = artifact.get("download_url")
+    if not value:
+        return None
+    value = str(value)
+    if artifact_id and value == canonical_quarantine_download_url(str(artifact_id)):
+        return None
+    return value
+
+
+def rootrap_quarantine_records(root: Path | None = None) -> list[dict[str, Any]]:
+    root = root or ROOTRAP_QUARANTINE_DIR
+    if not root.exists():
+        return []
+
+    records_by_artifact_id: dict[str, dict[str, Any]] = {}
+    for evidence_dir in sorted(root.iterdir()):
+        if not evidence_dir.is_dir():
+            continue
+
+        artifact_file = evidence_dir / "artifact.bin"
+        if not artifact_file.exists() or not artifact_file.is_file():
+            continue
+
+        metadata_path = evidence_dir / "metadata.json"
+        hashes_path = evidence_dir / "hashes.json"
+        manifest_path = evidence_dir / "manifest.json"
+        metadata = read_json_object(metadata_path)
+        profile = metadata.get("rootkit_profile") if isinstance(metadata.get("rootkit_profile"), dict) else {}
+        alert_id = str(metadata.get("alert_id") or evidence_dir.name)
+        artifact_id = str(metadata.get("artifact_id") or f"ART-{alert_id}")
+        actual_sha256 = calculate_sha256(artifact_file)
+
+        records_by_artifact_id[artifact_id] = {
+            "artifact_id": artifact_id,
+            "alert_id": alert_id,
+            "filename": metadata.get("artifact_name") or metadata.get("filename") or artifact_file.name,
+            "original_filename": metadata.get("artifact_name") or artifact_file.name,
+            "sha256": actual_sha256,
+            "md5": None,
+            "sha1": None,
+            "original_path": metadata.get("original_path"),
+            "stored_path": str(artifact_file),
+            "quarantine_path": str(artifact_file),
+            "metadata_path": str(metadata_path) if metadata_path.exists() else None,
+            "hashes_path": str(hashes_path) if hashes_path.exists() else None,
+            "manifest_path": str(manifest_path) if manifest_path.exists() else None,
+            "rootkit_category": profile.get("category") or metadata.get("rootkit_category"),
+            "risk_level": metadata.get("risk_level"),
+            "status": "READY_FOR_ANALYSIS",
+            "integrity_verified": True,
+            "ready_for_sandbox": True,
+            "created_at": metadata.get("quarantined_at") or metadata.get("detected_at"),
+            "source": "ROOTRAP_LOCAL_QUARANTINE_DIR",
+            "download_integrity_status": "VERIFIED_LOCAL",
+        }
+
+    return list(records_by_artifact_id.values())
+
+
+def merge_quarantine_sources(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {
+        str(item.get("artifact_id")): dict(item)
+        for item in artifacts
+        if item.get("artifact_id")
+    }
+
+    for local_record in rootrap_quarantine_records():
+        artifact_id = str(local_record.get("artifact_id"))
+        existing = merged.get(artifact_id)
+        if existing and source_download_url(existing):
+            continue
+        if existing and existing.get("sha256") and existing.get("sha256") != local_record.get("sha256"):
+            local_record["manifest_sha256"] = existing.get("sha256")
+        merged[artifact_id] = {**(existing or {}), **local_record}
+
+    return list(merged.values())
+
+
+def local_artifact_candidates(artifact: dict[str, Any]) -> list[Path]:
+    candidates: list[Path] = []
+    for key in ("stored_path", "quarantine_path"):
+        path = resolve_local_path(artifact.get(key))
+        if path and path.exists() and path.is_file() and path not in candidates:
+            candidates.append(path)
+
+    alert_id = artifact.get("alert_id")
+    if alert_id:
+        artifact_dir = ARTIFACTS_DIR / str(alert_id)
+        if artifact_dir.exists():
+            for candidate in sorted(artifact_dir.iterdir()):
+                if candidate.is_file() and candidate not in candidates:
+                    candidates.append(candidate)
+
+    return candidates
+
+
+def select_downloadable_local_artifact(artifact: dict[str, Any]) -> tuple[Path | None, str | None, list[dict[str, str]]]:
+    expected_sha256 = str(artifact.get("sha256") or "").lower()
+    mismatches: list[dict[str, str]] = []
+    first_existing: tuple[Path, str] | None = None
+
+    for candidate in local_artifact_candidates(artifact):
+        actual_sha256 = calculate_sha256(candidate)
+        if first_existing is None:
+            first_existing = (candidate, actual_sha256)
+        if not expected_sha256 or actual_sha256 == expected_sha256:
+            return candidate, actual_sha256, mismatches
+        mismatches.append(
+            {
+                "path": str(candidate),
+                "expected_sha256": expected_sha256,
+                "actual_sha256": actual_sha256,
+            }
+        )
+
+    if first_existing and not expected_sha256:
+        return first_existing[0], first_existing[1], mismatches
+
+    return None, None, mismatches
 
 
 @app.get("/")
@@ -179,7 +320,7 @@ def upload_quarantined_artifact(
 
 @app.get("/api/quarantine")
 def get_quarantine():
-    artifacts = load_json(QUARANTINE_FILE)
+    artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
 
     return {
         "count": len(artifacts),
@@ -324,38 +465,48 @@ def receive_quarantine_manifest(manifest: QuarantineManifest):
         "artifact": manifest_dict
    }
 
-
-
-
 @app.get("/api/quarantine/ready")
 def get_ready_quarantine_artifacts():
-    """
-    Simple M3 endpoint.
-    Reads real files from /var/lib/rootrap/quarantine only.
-    """
-    import json
-    from pathlib import Path
+    artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
 
-    root = Path("/var/lib/rootrap/quarantine")
-    artifacts = []
+    ready_artifacts = []
 
-    if not root.exists():
-        return {
-            "count": 0,
-            "artifacts": [],
-            "message": "Quarantine directory not found"
-        }
+    for artifact in artifacts:
+        is_ready = (
+            artifact.get("status") == "READY_FOR_ANALYSIS"
+            or artifact.get("ready_for_sandbox") is True
+        )
 
-<<<<<<< HEAD
         if is_ready:
             artifact_id = artifact.get("artifact_id")
-            download_url = f"/api/quarantine/{artifact_id}/download"
+            if not artifact_id:
+                continue
+
+            download_url = canonical_quarantine_download_url(str(artifact_id))
+            local_file, actual_sha256, mismatches = select_downloadable_local_artifact(artifact)
+            external_source = source_download_url(artifact)
+
+            if local_file:
+                exposed_sha256 = actual_sha256 or artifact.get("sha256")
+                download_integrity_status = "VERIFIED_LOCAL"
+            elif external_source:
+                exposed_sha256 = artifact.get("sha256")
+                download_integrity_status = "REDIRECT_SOURCE"
+            else:
+                artifact["ready_for_sandbox"] = False
+                artifact["integrity_verified"] = False
+                artifact["status"] = "INTEGRITY_FAILED"
+                artifact["download_integrity_error"] = (
+                    "No downloadable artifact matches the manifest SHA256"
+                )
+                artifact["download_hash_mismatches"] = mismatches
+                continue
 
             ready_artifacts.append({
                 "artifact_id": artifact.get("artifact_id"),
                 "alert_id": artifact.get("alert_id"),
                 "filename": artifact.get("filename") or artifact.get("original_filename"),
-                "sha256": artifact.get("sha256"),
+                "sha256": exposed_sha256,
                 "download_url": download_url,
                 "status": artifact.get("status", "READY_FOR_ANALYSIS"),
                 "integrity_verified": artifact.get("integrity_verified", False),
@@ -363,53 +514,16 @@ def get_ready_quarantine_artifacts():
                 "quarantine_path": artifact.get("quarantine_path") or artifact.get("stored_path"),
                 "metadata_path": artifact.get("metadata_path"),
                 "hashes_path": artifact.get("hashes_path"),
-                "manifest_path": artifact.get("manifest_path")
+                "manifest_path": artifact.get("manifest_path"),
+                "download_integrity_status": download_integrity_status,
             })
-=======
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
 
-        artifact_file = d / "artifact.bin"
-        metadata_file = d / "metadata.json"
-
-        if not artifact_file.exists():
-            continue
-
-        alert_id = d.name
-        artifact_id = f"ART-{alert_id}"
-        filename = "artifact.bin"
-        sha256 = None
-
-        if metadata_file.exists():
-            try:
-                meta = json.loads(metadata_file.read_text(encoding="utf-8"))
-                artifact_id = meta.get("artifact_id", artifact_id)
-                alert_id = meta.get("alert_id", alert_id)
-                filename = meta.get("filename", filename)
-                sha256 = meta.get("sha256", sha256)
-            except Exception:
-                pass
-
-        artifacts.append({
-            "artifact_id": artifact_id,
-            "alert_id": alert_id,
-            "filename": filename,
-            "sha256": sha256,
-            "download_url": f"/api/quarantine/{artifact_id}/download",
-            "status": "READY_FOR_ANALYSIS",
-            "integrity_verified": True,
-            "ready_for_sandbox": True,
-            "quarantine_path": str(artifact_file),
-            "metadata_path": str(metadata_file) if metadata_file.exists() else None
-        })
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
+    save_json(QUARANTINE_FILE, artifacts)
 
     return {
-        "count": len(artifacts),
-        "artifacts": artifacts
+        "count": len(ready_artifacts),
+        "artifacts": ready_artifacts
     }
-
 
 # ============================================================
 # M4 Integration with M3 Sandbox Analysis
@@ -489,88 +603,61 @@ def get_sandbox_result_by_artifact(artifact_id: str):
 # Artifact download endpoint for M3 Sandbox
 # ============================================================
 
-
-
-
 @app.get("/api/quarantine/{artifact_id}/download")
 def download_quarantined_artifact(artifact_id: str):
-    """
-    Simple M3 download endpoint.
-    Downloads real artifact.bin from /var/lib/rootrap/quarantine.
-    """
-    import json
-    from pathlib import Path
-    from fastapi import HTTPException
-    from fastapi.responses import FileResponse
+    artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
 
-    root = Path("/var/lib/rootrap/quarantine")
-
-    if not root.exists():
-        raise HTTPException(status_code=404, detail="Quarantine directory not found")
-
-<<<<<<< HEAD
-    file_path = resolve_local_path(
-        artifact.get("stored_path") or artifact.get("quarantine_path")
+    artifact = next(
+        (a for a in artifacts if a.get("artifact_id") == artifact_id),
+        None
     )
 
-    if not file_path or not file_path.exists():
-        source_url = artifact.get("download_url")
-        canonical_url = f"/api/quarantine/{artifact_id}/download"
-        if source_url and source_url != canonical_url:
-            return RedirectResponse(url=source_url, status_code=307)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
 
-        alert_id = artifact.get("alert_id")
-        if alert_id:
-            artifact_dir = ARTIFACTS_DIR / alert_id
-            if artifact_dir.exists():
-                files = os.listdir(artifact_dir)
-                if files:
-                    file_path = artifact_dir / files[0]
+    file_path, actual_sha256, mismatches = select_downloadable_local_artifact(artifact)
 
-        if not file_path or not file_path.exists():
+    if not file_path:
+        external_source = source_download_url(artifact)
+        if external_source:
+            return RedirectResponse(url=external_source, status_code=307)
+
+        if mismatches:
+            artifact["status"] = "INTEGRITY_FAILED"
+            artifact["integrity_verified"] = False
+            artifact["ready_for_sandbox"] = False
+            artifact["download_hash_mismatches"] = mismatches
+            save_json(QUARANTINE_FILE, artifacts)
             raise HTTPException(
-                status_code=404,
-                detail="Artifact file not found on backend"
+                status_code=409,
+                detail={
+                    "error": "Artifact hash mismatch",
+                    "message": "M4 refused to serve a file that does not match the manifest SHA256",
+                    "mismatches": mismatches,
+                },
             )
-=======
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
 
-        artifact_file = d / "artifact.bin"
-        metadata_file = d / "metadata.json"
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
+        raise HTTPException(
+            status_code=404,
+            detail="Artifact file not found on backend"
+        )
 
-        if not artifact_file.exists():
-            continue
+    filename = (
+        artifact.get("original_filename")
+        or artifact.get("filename")
+        or "artifact.bin"
+    )
 
-<<<<<<< HEAD
+    artifact["downloaded_sha256"] = actual_sha256
+    artifact["download_integrity_checked_at"] = datetime.utcnow().isoformat() + "Z"
+    save_json(QUARANTINE_FILE, artifacts)
+
     return FileResponse(
         path=str(file_path),
         filename=filename,
         media_type="application/octet-stream"
     )
-=======
-        current_artifact_id = f"ART-{d.name}"
-        filename = "artifact.bin"
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
 
-        if metadata_file.exists():
-            try:
-                meta = json.loads(metadata_file.read_text(encoding="utf-8"))
-                current_artifact_id = meta.get("artifact_id", current_artifact_id)
-                filename = meta.get("filename", filename)
-            except Exception:
-                pass
-
-        if current_artifact_id == artifact_id:
-            return FileResponse(
-                path=str(artifact_file),
-                filename=filename,
-                media_type="application/octet-stream"
-            )
-
-    raise HTTPException(status_code=404, detail="Artifact not found")
 
 
 @app.get("/ui")
