@@ -13,7 +13,7 @@ import requests
 try:
     from sandbox_config import BACKEND_URL as CONFIG_BACKEND_URL
 except ImportError:
-    CONFIG_BACKEND_URL = "https://accommodations-requiring-henry-workshops.trycloudflare.com"
+    CONFIG_BACKEND_URL = "https://tremendous-cow-functionality-puzzles.trycloudflare.com"
 
 
 READY_ENDPOINT = "/api/quarantine/ready"

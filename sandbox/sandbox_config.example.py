@@ -10,7 +10,7 @@ GUEST_IP = "192.168.56.111"
 
 REMOTE_WORKDIR = "/home/asma/sandbox_run"
 
-BACKEND_URL = "https://accommodations-requiring-henry-workshops.trycloudflare.com"
+BACKEND_URL = "https://tremendous-cow-functionality-puzzles.trycloudflare.com"
 QUARANTINE_ENDPOINT = "/api/quarantine"
 SANDBOX_RESULT_ENDPOINT = "/api/sandbox/results"
 

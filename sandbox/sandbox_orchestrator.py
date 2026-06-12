@@ -163,7 +163,7 @@ def download_artifact_from_backend(artifact_info):
     Télécharge l’artefact depuis download_url via le backend M4.
     Exemple :
     download_url = /api/quarantine/artifact_001/download
-    BACKEND_URL = https://accommodations-requiring-henry-workshops.trycloudflare.com
+    BACKEND_URL = https://tremendous-cow-functionality-puzzles.trycloudflare.com
     """
     download_url = artifact_info.get("download_url")
 
