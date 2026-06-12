@@ -23,6 +23,7 @@ const fallbackBootChecks = [
 ];
 
 let bootDone = false;
+let bootReady = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -613,12 +614,14 @@ async function loadData() {
 }
 
 function finishBoot() {
-  if (bootDone) return;
+  if (bootDone || !bootReady) return;
   bootDone = true;
   const boot = $("#boot-screen");
   if (!boot) return;
   $("#boot-progress").style.width = "100%";
-  $("#boot-status").textContent = "ready.";
+  const percent = $("#boot-percent");
+  if (percent) percent.textContent = "100%";
+  $("#boot-status").textContent = "opening dashboard...";
   boot.classList.add("leaving");
   window.setTimeout(() => boot.remove(), 460);
 }
@@ -662,6 +665,7 @@ async function runBootSequence() {
   const log = $("#boot-log");
   const progress = $("#boot-progress");
   const status = $("#boot-status");
+  const percent = $("#boot-percent");
   const skip = $("#boot-skip");
   if (!boot || !log || !progress || !status) return;
 
@@ -692,6 +696,7 @@ async function runBootSequence() {
     window.setTimeout(() => {
       if (bootDone) return;
       progress.style.width = `${step.progress}%`;
+      if (percent) percent.textContent = `${step.progress}%`;
       status.textContent = step.status;
       log.textContent += `${step.line}\n`;
       log.scrollTop = log.scrollHeight;
@@ -699,12 +704,20 @@ async function runBootSequence() {
         setBootModule(step.check);
       }
       if (index === bootSteps.length - 1) {
-        window.setTimeout(finishBoot, 520);
+        bootReady = true;
+        skip?.classList.add("ready");
       }
     }, 260 + index * 310);
   });
 
-  skip?.addEventListener("click", finishBoot);
+  skip?.addEventListener("click", () => {
+    bootReady = true;
+    finishBoot();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") finishBoot();
+  });
 }
 
 function bindEvents() {
