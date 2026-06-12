@@ -88,18 +88,19 @@ const state = {
 };
 
 const bootSteps = [
-  { progress: 7, status: "mounting secure workspace...", line: "[ OK ] mounted /opt/rootkit-defense" },
-  { progress: 15, status: "loading agent telemetry...", line: "[ OK ] agent telemetry channel online" },
-  { progress: 27, status: "checking quarantine vault...", line: "[ OK ] evidence vault integrity policy loaded" },
-  { progress: 39, status: "binding sandbox handoff...", line: "[ OK ] isolated runtime handoff endpoint ready" },
-  { progress: 52, status: "hydrating IOC index...", line: "[ OK ] yara/ioc analyzer cache warm" },
-  { progress: 66, status: "verifying dashboard API...", line: "[ OK ] /api/health responsive" },
-  { progress: 78, status: "loading threat map...", line: "[ OK ] network telemetry renderer initialized" },
-  { progress: 91, status: "arming operator console...", line: "[ OK ] live SOC dashboard armed" },
-  { progress: 100, status: "ready.", line: "[ READY ] rootkit-defense agent console online" }
+  { progress: 8, status: "mounting hardened workspace...", line: "root@rda:~$ mount /opt/rootkit-defense --secure" },
+  { progress: 18, status: "loading kernel telemetry...", line: "[ OK ] hidden-process and module sensors online", module: "boot-m1" },
+  { progress: 32, status: "preserving quarantine evidence...", line: "[ OK ] evidence vault policy loaded", module: "boot-m2" },
+  { progress: 47, status: "verifying chain of custody...", line: "[ OK ] hash-before-copy/hash-after-copy controls active" },
+  { progress: 62, status: "starting sandbox handoff bridge...", line: "[ OK ] isolated analysis handoff ready", module: "boot-m3" },
+  { progress: 76, status: "loading IOC reporting engine...", line: "[ OK ] YARA/IOC scoring cache warmed", module: "boot-m4" },
+  { progress: 88, status: "checking dashboard API...", line: "[ OK ] /api/health responsive" },
+  { progress: 96, status: "arming operator console...", line: "[ OK ] live SOC dashboard armed" },
+  { progress: 100, status: "secure environment ready.", line: "[ READY ] press ENTER to open dashboard" }
 ];
 
 let bootDone = false;
+let bootReady = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -530,12 +531,14 @@ async function loadData() {
 }
 
 function finishBoot() {
-  if (bootDone) return;
+  if (bootDone || !bootReady) return;
   bootDone = true;
   const boot = $("#boot-screen");
   if (!boot) return;
   $("#boot-progress").style.width = "100%";
-  $("#boot-status").textContent = "ready.";
+  const percent = $("#boot-percent");
+  if (percent) percent.textContent = "100%";
+  $("#boot-status").textContent = "opening dashboard...";
   boot.classList.add("leaving");
   window.setTimeout(() => boot.remove(), 460);
 }
@@ -545,6 +548,7 @@ function runBootSequence() {
   const log = $("#boot-log");
   const progress = $("#boot-progress");
   const status = $("#boot-status");
+  const percent = $("#boot-percent");
   const skip = $("#boot-skip");
   if (!boot || !log || !progress || !status) return;
 
@@ -553,16 +557,32 @@ function runBootSequence() {
     window.setTimeout(() => {
       if (bootDone) return;
       progress.style.width = `${step.progress}%`;
+      if (percent) percent.textContent = `${step.progress}%`;
       status.textContent = step.status;
       log.textContent += `${step.line}\n`;
       log.scrollTop = log.scrollHeight;
+      if (step.module) {
+        const moduleStatus = document.getElementById(step.module);
+        if (moduleStatus) {
+          moduleStatus.textContent = "[ OK ]";
+          moduleStatus.classList.add("ok");
+        }
+      }
       if (index === bootSteps.length - 1) {
-        window.setTimeout(finishBoot, 520);
+        bootReady = true;
+        skip?.classList.add("ready");
       }
     }, 260 + index * 310);
   });
 
-  skip?.addEventListener("click", finishBoot);
+  skip?.addEventListener("click", () => {
+    bootReady = true;
+    finishBoot();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") finishBoot();
+  });
 }
 
 function bindEvents() {
