@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from evidence_quarantine.backend_alert_processor import process_backend_ready_alerts
+from evidence_quarantine.backend_alert_processor import sync_local_ready_manifests
 from evidence_quarantine.backend_client import BackendSyncError, build_quarantine_manifest, post_quarantine_manifest
 from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.lab_detector import LabDetector
@@ -145,6 +146,14 @@ def _auto_process_backend_alerts(args: argparse.Namespace) -> int:
                 send_manifest=not args.no_send_manifest,
                 skip_existing=not args.reprocess_existing,
             )
+            if not args.no_sync_local_ready:
+                payload["local_ready_sync"] = sync_local_ready_manifests(
+                    manager,
+                    args.backend_url,
+                    timeout=args.timeout,
+                    public_base_url=args.public_base_url,
+                    retry_sent=args.retry_sent_manifests,
+                )
             payload["iteration"] = iteration
             payload["worker"] = "m2-auto-quarantine"
             _json_print(payload)
@@ -332,6 +341,20 @@ def build_parser() -> argparse.ArgumentParser:
     auto_process_backend.add_argument("--interval", type=float, default=15.0, help="Polling interval in seconds")
     auto_process_backend.add_argument("--timeout", type=float, default=10.0)
     auto_process_backend.add_argument("--once", action="store_true", help="Run one polling iteration and exit")
+    auto_process_backend.add_argument(
+        "--public-base-url",
+        help="Public URL for this M2 dashboard, used as artifact download_url for local quarantine records",
+    )
+    auto_process_backend.add_argument(
+        "--no-sync-local-ready",
+        action="store_true",
+        help="Do not publish local READY_FOR_ANALYSIS records to M4",
+    )
+    auto_process_backend.add_argument(
+        "--retry-sent-manifests",
+        action="store_true",
+        help="Re-send local manifests even if they were already marked as sent",
+    )
     auto_process_backend.add_argument(
         "--reprocess-existing",
         action="store_true",

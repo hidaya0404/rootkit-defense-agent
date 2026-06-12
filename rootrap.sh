@@ -235,6 +235,7 @@ case "$cmd" in
       --backend-url "${ROOTKIT_DEFENSE_M4_URL:-https://stopped-cet-musician-render.trycloudflare.com}" \
       --interval "${ROOTRAP_M2_POLL_INTERVAL:-15}" \
       --status ARTIFACT_READY \
+      --public-base-url "${ROOTRAP_PUBLIC_BASE_URL:-}" \
       --once
     ;;
   quarantine)

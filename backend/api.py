@@ -1,5 +1,5 @@
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, UploadFile, File, Form, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -255,6 +255,7 @@ class QuarantineManifest(BaseModel):
     sha1: Optional[str] = None
     original_path: Optional[str] = None
     quarantine_path: str
+    stored_path: Optional[str] = None
     metadata_path: Optional[str] = None
     hashes_path: Optional[str] = None
     manifest_path: Optional[str] = None
@@ -309,15 +310,14 @@ def get_ready_quarantine_artifacts():
 
         if is_ready:
             artifact_id = artifact.get("artifact_id")
-
-            artifact["download_url"] = artifact.get("download_url") or f"/api/quarantine/{artifact_id}/download"
+            download_url = f"/api/quarantine/{artifact_id}/download"
 
             ready_artifacts.append({
                 "artifact_id": artifact.get("artifact_id"),
                 "alert_id": artifact.get("alert_id"),
                 "filename": artifact.get("filename") or artifact.get("original_filename"),
                 "sha256": artifact.get("sha256"),
-                "download_url": artifact.get("download_url"),
+                "download_url": download_url,
                 "status": artifact.get("status", "READY_FOR_ANALYSIS"),
                 "integrity_verified": artifact.get("integrity_verified", False),
                 "ready_for_sandbox": artifact.get("ready_for_sandbox", False),
@@ -425,10 +425,24 @@ def download_quarantined_artifact(artifact_id: str):
     file_path = artifact.get("stored_path") or artifact.get("quarantine_path")
 
     if not file_path or not os.path.exists(file_path):
-        raise HTTPException(
-            status_code=404,
-            detail="Artifact file not found on backend"
-        )
+        source_url = artifact.get("download_url")
+        canonical_url = f"/api/quarantine/{artifact_id}/download"
+        if source_url and source_url != canonical_url:
+            return RedirectResponse(url=source_url, status_code=307)
+
+        alert_id = artifact.get("alert_id")
+        if alert_id:
+            artifact_dir = os.path.join(ARTIFACTS_DIR, alert_id)
+            if os.path.exists(artifact_dir):
+                files = os.listdir(artifact_dir)
+                if files:
+                    file_path = os.path.join(artifact_dir, files[0])
+
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Artifact file not found on backend"
+            )
 
     filename = (
         artifact.get("original_filename")

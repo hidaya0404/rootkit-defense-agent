@@ -193,11 +193,92 @@ def _manifest_download_url(alert_id: str, alert: dict[str, Any]) -> str:
     return _download_url_from_alert(alert) or f"/api/artifacts/{alert_id}/download"
 
 
+def _public_download_url(record: dict[str, Any], *, public_base_url: str | None) -> str | None:
+    existing = record.get("download_url")
+    if existing:
+        return str(existing)
+    alert_id = record.get("alert_id")
+    if not alert_id or not public_base_url:
+        return None
+    return public_base_url.rstrip("/") + f"/api/quarantine/{alert_id}/download"
+
+
 def _already_ready(record: dict[str, Any]) -> bool:
     return (
         record.get("status") == "READY_FOR_ANALYSIS"
         and record.get("integrity_verified") is True
         and record.get("ready_for_sandbox") is True
+    )
+
+
+def sync_local_ready_manifests(
+    manager: QuarantineManager,
+    backend_url: str,
+    *,
+    timeout: float = 10.0,
+    public_base_url: str | None = None,
+    retry_sent: bool = False,
+) -> dict[str, Any]:
+    """Publish local M2 READY_FOR_ANALYSIS records to M4 for M3 sandbox polling."""
+
+    records = [dict(record) for record in manager.list_evidence() if _already_ready(record)]
+    results: list[dict[str, Any]] = []
+
+    for record in records:
+        if record.get("backend_manifest_sent") and not retry_sent:
+            results.append(
+                {
+                    "success": True,
+                    "skipped": True,
+                    "stage": "already_synced",
+                    "alert_id": record.get("alert_id"),
+                    "artifact_id": record.get("artifact_id"),
+                }
+            )
+            continue
+
+        download_url = _public_download_url(record, public_base_url=public_base_url)
+        manifest = build_quarantine_manifest(record, download_url=download_url)
+        try:
+            response = post_quarantine_manifest_payload(backend_url, manifest, timeout=timeout)
+            record["backend_url"] = backend_url
+            record["backend_manifest_sent"] = True
+            record["backend_manifest_sent_at"] = utc_now()
+            record["backend_response"] = response
+            if download_url:
+                record["download_url"] = download_url
+            manager.repository.upsert(record)
+            results.append(
+                {
+                    "success": True,
+                    "alert_id": record.get("alert_id"),
+                    "artifact_id": record.get("artifact_id"),
+                    "manifest_sent": True,
+                    "download_url": download_url,
+                    "backend_response": response,
+                }
+            )
+        except BackendSyncError as exc:
+            results.append(
+                {
+                    "success": False,
+                    "alert_id": record.get("alert_id"),
+                    "artifact_id": record.get("artifact_id"),
+                    "manifest_sent": False,
+                    "download_url": download_url,
+                    "error": str(exc),
+                }
+            )
+
+    return to_jsonable(
+        {
+            "backend_url": backend_url,
+            "local_ready_records": len(records),
+            "sent_manifests": sum(1 for item in results if item.get("manifest_sent") is True),
+            "skipped_records": sum(1 for item in results if item.get("skipped") is True),
+            "failed_records": sum(1 for item in results if item.get("success") is False),
+            "results": results,
+        }
     )
 
 

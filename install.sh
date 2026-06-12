@@ -82,6 +82,13 @@ repo_dir() {
 }
 
 write_env_file() {
+  local ip public_base
+  ip="$(local_ip)"
+  public_base="${ROOTRAP_PUBLIC_BASE_URL:-}"
+  if [ -z "$public_base" ] && [ -n "$ip" ]; then
+    public_base="http://${ip}:${UI_PORT}"
+  fi
+
   mkdir -p "$CONFIG_DIR"
   cat > "$CONFIG_DIR/rootrap.env" <<EOF
 ROOTRAP_APP_DIR=$INSTALL_DIR
@@ -97,6 +104,7 @@ ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA=$REMOTE_DATA
 ROOTKIT_DEFENSE_STORAGE=$STATE_DIR
 ROOTKIT_DEFENSE_M4_URL=$M4_URL
 ROOTRAP_M2_POLL_INTERVAL=$M2_POLL_INTERVAL
+ROOTRAP_PUBLIC_BASE_URL=$public_base
 PYTHONPATH=$INSTALL_DIR
 PYTHONUNBUFFERED=1
 EOF
@@ -297,7 +305,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$INSTALL_DIR
 EnvironmentFile=$CONFIG_DIR/rootrap.env
-ExecStart=$INSTALL_DIR/.venv/bin/python -m evidence_quarantine --storage-root $STATE_DIR auto-process-backend --backend-url $M4_URL --interval $M2_POLL_INTERVAL --status ARTIFACT_READY
+ExecStart=$INSTALL_DIR/.venv/bin/python -m evidence_quarantine --storage-root $STATE_DIR auto-process-backend --backend-url $M4_URL --interval $M2_POLL_INTERVAL --status ARTIFACT_READY --public-base-url \${ROOTRAP_PUBLIC_BASE_URL}
 Restart=always
 RestartSec=10
 StandardOutput=journal
