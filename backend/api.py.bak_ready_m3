@@ -1,50 +1,29 @@
-<<<<<<< HEAD
-=======
-from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, UploadFile, File, Form, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
 from datetime import datetime
-import json
-import os
-import shutil
 import uuid
-from pathlib import Path
-from typing import Any, Dict, Optional
-
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+import os
+import json
+import shutil
 
 from analysis.static_analyzer import analyze_file
 from analysis.report_generator import generate_html_report
-from analysis.remediation import build_remediation_plan
 
 app = FastAPI(title="Rootkit Defense Agent API - M4")
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WEB_DIR = PROJECT_ROOT / "web"
-STATIC_DIR = WEB_DIR / "static"
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
-if STATIC_DIR.exists() and not any(route.path == "/static" for route in app.routes):
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-DATA_DIR = PROJECT_ROOT / "backend" / "data"
+DATA_DIR = "backend/data"
 ALERTS_FILE = os.path.join(DATA_DIR, "alerts.json")
 QUARANTINE_FILE = os.path.join(DATA_DIR, "quarantine.json")
 REPORTS_FILE = os.path.join(DATA_DIR, "reports.json")
-UPLOAD_QUARANTINE_DIR = PROJECT_ROOT / "uploads" / "quarantine"
-GENERATED_REPORTS_DIR = PROJECT_ROOT / "reports" / "generated"
-ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(UPLOAD_QUARANTINE_DIR, exist_ok=True)
-os.makedirs(GENERATED_REPORTS_DIR, exist_ok=True)
-os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+os.makedirs("uploads/quarantine", exist_ok=True)
+os.makedirs("reports/generated", exist_ok=True)
 
 
 class Alert(BaseModel):
@@ -72,17 +51,6 @@ def load_json(path):
 def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
-
-
-def resolve_local_path(path_value):
-    if not path_value:
-        return None
-
-    path = Path(path_value)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-
-    return path
 
 
 @app.get("/")
@@ -152,7 +120,7 @@ def upload_quarantined_artifact(
 ):
     artifact_id = str(uuid.uuid4())
     filename = f"{artifact_id}_{file.filename}"
-    file_path = UPLOAD_QUARANTINE_DIR / filename
+    file_path = os.path.join("uploads/quarantine", filename)
 
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -163,7 +131,7 @@ def upload_quarantined_artifact(
         "artifact_id": artifact_id,
         "alert_id": alert_id,
         "original_filename": file.filename,
-        "stored_path": str(file_path),
+        "stored_path": file_path,
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "status": "QUARANTINED"
     }
@@ -199,12 +167,12 @@ def analyze_artifact(artifact_id: str):
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    file_path = resolve_local_path(artifact.get("stored_path"))
+    file_path = artifact["stored_path"]
 
-    if not file_path or not file_path.exists():
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found on server")
 
-    analysis_result = analyze_file(str(file_path), artifact_id=artifact_id, alert_id=artifact.get("alert_id"))
+    analysis_result = analyze_file(file_path, artifact_id=artifact_id, alert_id=artifact.get("alert_id"))
     report_path = generate_html_report(artifact, analysis_result)
 
     reports = load_json(REPORTS_FILE)
@@ -243,6 +211,10 @@ def get_reports():
         "count": len(reports),
         "reports": reports
     }
+
+
+from analysis.remediation import build_remediation_plan
+
 
 @app.get("/api/remediation/{artifact_id}")
 def get_remediation_plan(artifact_id: str):
@@ -283,11 +255,9 @@ class QuarantineManifest(BaseModel):
     sha1: Optional[str] = None
     original_path: Optional[str] = None
     quarantine_path: str
-    stored_path: Optional[str] = None
     metadata_path: Optional[str] = None
     hashes_path: Optional[str] = None
     manifest_path: Optional[str] = None
-    download_url: Optional[str] = None
     rootkit_category: Optional[str] = None
     status: str = "READY_FOR_ANALYSIS"
     integrity_verified: bool = True
@@ -324,39 +294,29 @@ def receive_quarantine_manifest(manifest: QuarantineManifest):
         "artifact": manifest_dict
    }
 
-
-
-
 @app.get("/api/quarantine/ready")
 def get_ready_quarantine_artifacts():
-    """
-    Simple M3 endpoint.
-    Reads real files from /var/lib/rootrap/quarantine only.
-    """
-    import json
-    from pathlib import Path
+    artifacts = load_json(QUARANTINE_FILE)
 
-    root = Path("/var/lib/rootrap/quarantine")
-    artifacts = []
+    ready_artifacts = []
 
-    if not root.exists():
-        return {
-            "count": 0,
-            "artifacts": [],
-            "message": "Quarantine directory not found"
-        }
+    for artifact in artifacts:
+        is_ready = (
+            artifact.get("status") == "READY_FOR_ANALYSIS"
+            or artifact.get("ready_for_sandbox") is True
+        )
 
-<<<<<<< HEAD
         if is_ready:
             artifact_id = artifact.get("artifact_id")
-            download_url = f"/api/quarantine/{artifact_id}/download"
+
+            artifact["download_url"] = f"/api/quarantine/{artifact_id}/download"
 
             ready_artifacts.append({
                 "artifact_id": artifact.get("artifact_id"),
                 "alert_id": artifact.get("alert_id"),
                 "filename": artifact.get("filename") or artifact.get("original_filename"),
                 "sha256": artifact.get("sha256"),
-                "download_url": download_url,
+                "download_url": artifact.get("download_url"),
                 "status": artifact.get("status", "READY_FOR_ANALYSIS"),
                 "integrity_verified": artifact.get("integrity_verified", False),
                 "ready_for_sandbox": artifact.get("ready_for_sandbox", False),
@@ -365,51 +325,11 @@ def get_ready_quarantine_artifacts():
                 "hashes_path": artifact.get("hashes_path"),
                 "manifest_path": artifact.get("manifest_path")
             })
-=======
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
-
-        artifact_file = d / "artifact.bin"
-        metadata_file = d / "metadata.json"
-
-        if not artifact_file.exists():
-            continue
-
-        alert_id = d.name
-        artifact_id = f"ART-{alert_id}"
-        filename = "artifact.bin"
-        sha256 = None
-
-        if metadata_file.exists():
-            try:
-                meta = json.loads(metadata_file.read_text(encoding="utf-8"))
-                artifact_id = meta.get("artifact_id", artifact_id)
-                alert_id = meta.get("alert_id", alert_id)
-                filename = meta.get("filename", filename)
-                sha256 = meta.get("sha256", sha256)
-            except Exception:
-                pass
-
-        artifacts.append({
-            "artifact_id": artifact_id,
-            "alert_id": alert_id,
-            "filename": filename,
-            "sha256": sha256,
-            "download_url": f"/api/quarantine/{artifact_id}/download",
-            "status": "READY_FOR_ANALYSIS",
-            "integrity_verified": True,
-            "ready_for_sandbox": True,
-            "quarantine_path": str(artifact_file),
-            "metadata_path": str(metadata_file) if metadata_file.exists() else None
-        })
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
 
     return {
-        "count": len(artifacts),
-        "artifacts": artifacts
+        "count": len(ready_artifacts),
+        "artifacts": ready_artifacts
     }
-
 
 # ============================================================
 # M4 Integration with M3 Sandbox Analysis
@@ -489,102 +409,56 @@ def get_sandbox_result_by_artifact(artifact_id: str):
 # Artifact download endpoint for M3 Sandbox
 # ============================================================
 
-
-
-
 @app.get("/api/quarantine/{artifact_id}/download")
 def download_quarantined_artifact(artifact_id: str):
-    """
-    Simple M3 download endpoint.
-    Downloads real artifact.bin from /var/lib/rootrap/quarantine.
-    """
-    import json
-    from pathlib import Path
-    from fastapi import HTTPException
-    from fastapi.responses import FileResponse
+    artifacts = load_json(QUARANTINE_FILE)
 
-    root = Path("/var/lib/rootrap/quarantine")
-
-    if not root.exists():
-        raise HTTPException(status_code=404, detail="Quarantine directory not found")
-
-<<<<<<< HEAD
-    file_path = resolve_local_path(
-        artifact.get("stored_path") or artifact.get("quarantine_path")
+    artifact = next(
+        (a for a in artifacts if a.get("artifact_id") == artifact_id),
+        None
     )
 
-    if not file_path or not file_path.exists():
-        source_url = artifact.get("download_url")
-        canonical_url = f"/api/quarantine/{artifact_id}/download"
-        if source_url and source_url != canonical_url:
-            return RedirectResponse(url=source_url, status_code=307)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
 
-        alert_id = artifact.get("alert_id")
-        if alert_id:
-            artifact_dir = ARTIFACTS_DIR / alert_id
-            if artifact_dir.exists():
-                files = os.listdir(artifact_dir)
-                if files:
-                    file_path = artifact_dir / files[0]
+    file_path = artifact.get("stored_path") or artifact.get("quarantine_path")
 
-        if not file_path or not file_path.exists():
-            raise HTTPException(
-                status_code=404,
-                detail="Artifact file not found on backend"
-            )
-=======
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Artifact file not found on backend"
+        )
 
-        artifact_file = d / "artifact.bin"
-        metadata_file = d / "metadata.json"
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
+    filename = (
+        artifact.get("original_filename")
+        or artifact.get("filename")
+        or "artifact.bin"
+    )
 
-        if not artifact_file.exists():
-            continue
-
-<<<<<<< HEAD
     return FileResponse(
-        path=str(file_path),
+        path=file_path,
         filename=filename,
         media_type="application/octet-stream"
     )
-=======
-        current_artifact_id = f"ART-{d.name}"
-        filename = "artifact.bin"
->>>>>>> 00bdfd7 (fix: expose quarantine artifacts for M3 sandbox)
 
-        if metadata_file.exists():
-            try:
-                meta = json.loads(metadata_file.read_text(encoding="utf-8"))
-                current_artifact_id = meta.get("artifact_id", current_artifact_id)
-                filename = meta.get("filename", filename)
-            except Exception:
-                pass
-
-        if current_artifact_id == artifact_id:
-            return FileResponse(
-                path=str(artifact_file),
-                filename=filename,
-                media_type="application/octet-stream"
-            )
-
-    raise HTTPException(status_code=404, detail="Artifact not found")
 
 
 @app.get("/ui")
 def splash_screen():
-    return FileResponse(str(WEB_DIR / "splash.html"))
+    return FileResponse("web/splash.html")
 
 
 @app.get("/dashboard")
 def dashboard():
-    return FileResponse(str(WEB_DIR / "dashboard.html"))
+    return FileResponse("web/dashboard.html")
 
 # ============================================================
 # M1 -> M4 -> M2 Compatibility Endpoints
 # ============================================================
+
+ARTIFACTS_DIR = "artifacts"
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+
 
 @app.post("/api/artifacts/upload")
 async def upload_artifact_from_m1(
@@ -597,10 +471,10 @@ async def upload_artifact_from_m1(
     M1 uploads a suspicious artifact linked to an alert.
     The artifact is saved on M4 backend so M2 can download it.
     """
-    artifact_dir = ARTIFACTS_DIR / alert_id
+    artifact_dir = os.path.join(ARTIFACTS_DIR, alert_id)
     os.makedirs(artifact_dir, exist_ok=True)
 
-    file_path = artifact_dir / file.filename
+    file_path = os.path.join(artifact_dir, file.filename)
 
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -610,7 +484,7 @@ async def upload_artifact_from_m1(
     for alert in alerts:
         if alert.get("alert_id") == alert_id:
             alert["status"] = "ARTIFACT_READY"
-            alert["artifact_path"] = str(file_path)
+            alert["artifact_path"] = file_path
             alert["artifact_sha256"] = sha256
             alert["original_path"] = original_path
             alert["artifact_filename"] = file.filename
@@ -623,7 +497,7 @@ async def upload_artifact_from_m1(
         "message": "Artifact uploaded successfully",
         "alert_id": alert_id,
         "filename": file.filename,
-        "artifact_path": str(file_path),
+        "artifact_path": file_path,
         "sha256": sha256,
         "download_url": f"/api/artifacts/{alert_id}/download"
     }
@@ -634,9 +508,9 @@ def download_artifact_for_m2(alert_id: str):
     """
     M2 downloads the artifact uploaded by M1.
     """
-    artifact_dir = ARTIFACTS_DIR / alert_id
+    artifact_dir = os.path.join(ARTIFACTS_DIR, alert_id)
 
-    if not artifact_dir.exists():
+    if not os.path.exists(artifact_dir):
         raise HTTPException(status_code=404, detail="Artifact directory not found")
 
     files = os.listdir(artifact_dir)
@@ -644,13 +518,45 @@ def download_artifact_for_m2(alert_id: str):
     if not files:
         raise HTTPException(status_code=404, detail="Artifact folder is empty")
 
-    file_path = artifact_dir / files[0]
+    file_path = os.path.join(artifact_dir, files[0])
 
-    if not file_path.exists():
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Artifact file not found")
 
     return FileResponse(
-        path=str(file_path),
+        path=file_path,
         filename=files[0],
         media_type="application/octet-stream"
     )
+
+# ============================================================
+# Remediation list endpoint for dashboard
+# ============================================================
+
+@app.get("/api/remediation")
+def list_remediation_items():
+    """
+    List remediation entries for the web dashboard.
+    """
+    items = []
+
+    try:
+        reports = load_json(REPORTS_FILE)
+    except Exception:
+        reports = []
+
+    for report in reports:
+        artifact_id = report.get("artifact_id")
+        if artifact_id:
+            items.append({
+                "artifact_id": artifact_id,
+                "risk_score": report.get("risk_score"),
+                "risk_level": report.get("risk_level"),
+                "status": report.get("status", "AVAILABLE"),
+                "remediation_url": f"/api/remediation/{artifact_id}"
+            })
+
+    return {
+        "count": len(items),
+        "items": items
+    }
