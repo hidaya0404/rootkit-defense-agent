@@ -220,6 +220,11 @@ def _simulate_rootkit(args: argparse.Namespace) -> int:
 
     if args.quarantine:
         payload = simulator.quarantine_scenario(args.scenario, QuarantineManager(config))
+        payload["auto_quarantine"] = True
+        payload["next_step"] = (
+            "Artifacts are already quarantined with status READY_FOR_ANALYSIS. "
+            "The M2 worker can now publish the manifest to M4 for M3 sandbox pickup."
+        )
     else:
         artifacts = simulator.create_scenario(args.scenario)
         payload = {
@@ -227,7 +232,11 @@ def _simulate_rootkit(args: argparse.Namespace) -> int:
             "scenario": args.scenario,
             "alerts_file": lab_root.resolve() / "alerts.json",
             "alerts": [artifact.to_alert() for artifact in artifacts],
-            "next_step": "Use --quarantine to send these benign artifacts into Evidence & Quarantine Manager.",
+            "auto_quarantine": False,
+            "next_step": (
+                "Artifacts were generated only. Run lab-detect or rerun without --no-quarantine "
+                "to send them into Evidence & Quarantine Manager."
+            ),
         }
 
     _json_print(payload)
@@ -394,11 +403,20 @@ def build_parser() -> argparse.ArgumentParser:
         default="full",
     )
     simulate.add_argument("--lab-root", help="Directory used as fake victim filesystem")
-    simulate.add_argument(
+    quarantine_mode = simulate.add_mutually_exclusive_group()
+    quarantine_mode.add_argument(
         "--quarantine",
+        dest="quarantine",
         action="store_true",
-        help="Immediately quarantine generated benign artifacts",
+        help="Immediately quarantine generated benign artifacts (default behavior)",
     )
+    quarantine_mode.add_argument(
+        "--no-quarantine",
+        dest="quarantine",
+        action="store_false",
+        help="Only generate benign lab alerts without sending them to quarantine",
+    )
+    simulate.set_defaults(quarantine=True)
     simulate.set_defaults(func=_simulate_rootkit)
 
     lab_detect = subparsers.add_parser(

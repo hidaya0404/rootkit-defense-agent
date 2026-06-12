@@ -38,12 +38,12 @@ Ces fichiers sont des marqueurs textuels ou binaires inoffensifs. Ils ne font au
 La machine victime execute :
 
 ```powershell
-python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario full --quarantine
+python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario full
 ```
 
 Dans une vraie integration avec le Membre 1, l'agent detecte les fichiers crees et appelle ton module.
 
-Pour une demo simple, la commande `--quarantine` remplace l'appel de l'agent et montre directement ton resultat.
+Pour une demo simple, la simulation met maintenant automatiquement les artefacts en quarantaine et montre directement ton resultat.
 
 ## Variante plus realiste
 

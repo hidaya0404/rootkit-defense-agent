@@ -14,7 +14,7 @@ PYTHONPATH=src python -m evidence_quarantine --storage-root ./runtime/rootkit-de
 Pour une demonstration plus complete avec plusieurs traces rootkit benignes :
 
 ```bash
-PYTHONPATH=src python -m evidence_quarantine --storage-root ./runtime/rootkit-defense simulate-rootkit --scenario full --quarantine
+PYTHONPATH=src python -m evidence_quarantine --storage-root ./runtime/rootkit-defense simulate-rootkit --scenario full
 ```
 
 ## Etapes a montrer au jury

@@ -61,7 +61,7 @@ rootrap m2-once
 rootrap diagnose
 rootrap quarantine list
 rootrap quarantine demo
-rootrap simulate-rootkit --scenario full --quarantine
+rootrap simulate-rootkit --scenario full
 ```
 
 La commande `roottrap` reste disponible comme alias de compatibilite, mais le nom officiel du produit est `rootrap`.

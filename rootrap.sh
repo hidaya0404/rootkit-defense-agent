@@ -136,7 +136,7 @@ Usage:
   rootrap quarantine <args>  Run M2 quarantine CLI commands
   rootrap m2-once            Pull M4 ARTIFACT_READY alerts once
   rootrap demo               Create a benign demo artifact in quarantine
-  rootrap simulate-rootkit   Create safe rootkit-like lab artifacts
+  rootrap simulate-rootkit   Create safe rootkit-like lab artifacts and quarantine them
   rootrap diagnose           Show quick troubleshooting output
   rootrap uninstall          Remove services, command and installed files
 
@@ -146,6 +146,7 @@ Examples:
   rootrap serve
   rootrap quarantine list
   rootrap quarantine demo
+  rootrap simulate-rootkit --scenario full
 EOF
 }
 

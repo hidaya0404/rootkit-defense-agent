@@ -64,7 +64,9 @@ $env:PYTHONPATH="src"
 python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario full
 ```
 
-Cette commande cree les artefacts benins dans :
+Cette commande cree les artefacts benins puis les met automatiquement en quarantaine avec le statut `READY_FOR_ANALYSIS`.
+
+Les artefacts de laboratoire sont crees dans :
 
 ```text
 runtime/rootkit-defense/lab-victim/
@@ -84,14 +86,14 @@ runtime/rootkit-defense/lab-victim/simulation_manifest.json
 
 Ce manifest de campagne resume les artefacts, leurs categories attendues et les indicateurs defensifs.
 
-## Lancer simulation + quarantaine directement
+## Lancer simulation sans quarantaine
 
 ```powershell
 $env:PYTHONPATH="src"
-python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario full --quarantine
+python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario full --no-quarantine
 ```
 
-Cette commande cree les artefacts puis les envoie directement dans ton module Evidence & Quarantine Manager.
+Cette variante sert uniquement a generer les fichiers et `alerts.json` sans les envoyer dans Evidence & Quarantine Manager.
 
 ## Scenarios disponibles
 
@@ -113,13 +115,13 @@ log-tamper     -> marqueur statique anti-forensic/log tampering
 Exemple :
 
 ```powershell
-python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario kernel-module --quarantine
+python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario kernel-module
 ```
 
 Exemple professionnel complet :
 
 ```powershell
-python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario full --quarantine
+python -m evidence_quarantine --storage-root .\runtime\rootkit-defense simulate-rootkit --scenario full
 ```
 
 Ce test couvre les surfaces de detection suivantes :
