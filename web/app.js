@@ -3,6 +3,7 @@ const state = {
   quarantine: [],
   sandbox: [],
   reports: [],
+  remediations: [],
   activeView: "dashboard",
   quarantineFilter: "ALL",
   query: "",
@@ -118,7 +119,17 @@ function allIncidents() {
     raw: result
   }));
 
-  return [...alerts, ...quarantine, ...sandbox]
+  const remediations = state.remediations.map((plan) => ({
+    timestamp: plan.generated_at || plan.created_at,
+    alert_id: plan.alert_id,
+    source: "remediation",
+    event: selectedPlaybook(plan) || "AI remediation",
+    severity: plan.risk_level || aiRecommendation(plan).risk_level || "MEDIUM",
+    action: remediationDecision(plan) || "PENDING",
+    raw: plan
+  }));
+
+  return [...alerts, ...quarantine, ...sandbox, ...remediations]
     .filter((item) => queryMatches(item.raw))
     .sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
 }
@@ -128,6 +139,10 @@ function matchingQuarantine() {
     const filterOk = state.quarantineFilter === "ALL" || record.status === state.quarantineFilter;
     return filterOk && queryMatches(record);
   });
+}
+
+function matchingRemediations() {
+  return state.remediations.filter(queryMatches);
 }
 
 function setDonut(id, value, total, offset) {
@@ -200,6 +215,62 @@ function renderRecentQuarantine() {
   `).join("") || `<div class="mini-row"><span>NO ARTIFACTS</span><strong>0</strong></div>`;
 }
 
+function aiRecommendation(plan) {
+  return plan?.ai_recommendation || plan?.analysis?.ai_recommendation || {};
+}
+
+function selectedPlaybook(plan) {
+  const selected = aiRecommendation(plan).selected_playbook || plan?.selected_playbook || {};
+  return selected.title || selected.id || plan?.playbook || "";
+}
+
+function remediationDecision(plan) {
+  return plan?.decision || aiRecommendation(plan).decision || "";
+}
+
+function remediationActions(plan) {
+  if (Array.isArray(plan?.actions) && plan.actions.length) {
+    return plan.actions.map((action) => ({
+      title: action.title || action.status || "action",
+      body: action.action || action.command || JSON.stringify(action),
+      status: action.status || "RECOMMENDED"
+    }));
+  }
+
+  const ai = aiRecommendation(plan);
+  if (Array.isArray(ai.recommended_actions)) {
+    return ai.recommended_actions.map((action) => ({
+      title: "Recommandation AI",
+      body: action,
+      status: "AI_RECOMMENDED"
+    }));
+  }
+
+  return [];
+}
+
+function renderRemediationSummary() {
+  const items = matchingRemediations();
+  const humanValidation = items.filter((item) => item.requires_human_validation !== false).length;
+  const critical = items.filter((item) => severityClass(item.risk_level || aiRecommendation(item).risk_level) === "critical").length;
+  const latest = items[0];
+
+  $("#remediation-summary").innerHTML = `
+    <div class="remediation-kpis">
+      <article><span>plans</span><strong>${items.length}</strong></article>
+      <article><span>critical</span><strong>${critical}</strong></article>
+      <article><span>human validation</span><strong>${humanValidation}</strong></article>
+    </div>
+    ${latest ? `
+      <div class="remediation-latest">
+        <span>${escapeHtml(latest.artifact_id || latest.alert_id || "latest artifact")}</span>
+        <strong>${escapeHtml(selectedPlaybook(latest) || "Playbook AI en attente")}</strong>
+        <em>${escapeHtml(remediationDecision(latest) || "Decision en attente")}</em>
+      </div>
+    ` : `<div class="empty-state compact"><strong>Aucun plan</strong><span>en attente de la remediation M4</span></div>`}
+  `;
+}
+
 function renderTrend() {
   const now = new Date();
   const buckets = Array.from({ length: 24 }, () => 0);
@@ -237,6 +308,7 @@ function renderOverview() {
   renderThreatSummary();
   renderNetworkMap();
   renderRecentQuarantine();
+  renderRemediationSummary();
   renderTrend();
   renderActivityLog();
   const errors = Object.values(state.connectionErrors).filter(Boolean).length;
@@ -414,6 +486,72 @@ function renderReports() {
   $("#reports-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucun rapport</td></tr>`;
 }
 
+function renderRemediation() {
+  const items = matchingRemediations();
+  const rows = items.map((plan, index) => {
+    const ai = aiRecommendation(plan);
+    const riskLevel = plan.risk_level || ai.risk_level || "UNKNOWN";
+    const validation = plan.requires_human_validation === false ? "AUTO" : "HUMAN";
+    return `
+      <tr data-remediation-index="${index}">
+        <td class="mono">${escapeHtml(plan.artifact_id || plan.alert_id || "-")}</td>
+        <td><span class="badge ${severityClass(riskLevel)}">${escapeHtml(riskLevel)}</span></td>
+        <td>${escapeHtml(remediationDecision(plan) || "-")}</td>
+        <td>${escapeHtml(selectedPlaybook(plan) || "-")}</td>
+        <td><span class="badge ${validation === "HUMAN" ? "medium" : "ready"}">${validation}</span></td>
+      </tr>
+    `;
+  });
+
+  $("#remediation-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucun plan de remediation recu</td></tr>`;
+  $$("#remediation-table tr[data-remediation-index]").forEach((row) => {
+    row.addEventListener("click", () => {
+      $$("#remediation-table tr").forEach((item) => item.classList.remove("selected"));
+      row.classList.add("selected");
+      renderRemediationDetail(items[Number(row.dataset.remediationIndex)]);
+    });
+  });
+  renderRemediationDetail(items[0]);
+}
+
+function renderRemediationDetail(plan) {
+  const panel = $("#remediation-detail");
+  if (!plan) {
+    panel.innerHTML = emptyState("Selectionner un plan", "AI remediation advisor");
+    return;
+  }
+
+  const ai = aiRecommendation(plan);
+  const model = ai.model || {};
+  const selected = ai.selected_playbook || {};
+  const actions = remediationActions(plan).slice(0, 12);
+  const matchedSignals = Array.isArray(ai.matched_signals) ? ai.matched_signals.join(", ") : "";
+
+  panel.innerHTML = `
+    <div class="detail-stack">
+      <div class="detail-title">
+        <strong>${escapeHtml(plan.artifact_id || plan.alert_id || "remediation")}</strong>
+        <span>${escapeHtml(selected.title || selected.id || "AI remediation advisor")}</span>
+      </div>
+      ${detailRow("model", `${model.name || "RDA-Remediation-AI"} ${model.version || ""}`)}
+      ${detailRow("external api", model.external_api === true ? "YES" : "NO")}
+      ${detailRow("confidence", valueOrDash(ai.confidence))}
+      ${detailRow("risk", `${valueOrDash(plan.risk_level || ai.risk_level)} / ${valueOrDash(plan.risk_score || ai.risk_score)}`)}
+      ${detailRow("decision", remediationDecision(plan), true)}
+      ${detailRow("matched signals", matchedSignals || "-", true)}
+      <div class="remediation-actions">
+        ${actions.map((action) => `
+          <article>
+            <span class="badge ${severityClass(action.status)}">${escapeHtml(action.status)}</span>
+            <strong>${escapeHtml(action.title)}</strong>
+            <p>${escapeHtml(action.body)}</p>
+          </article>
+        `).join("") || `<div class="empty-state compact"><strong>Aucune action</strong><span>M4 n'a retourne aucune action</span></div>`}
+      </div>
+    </div>
+  `;
+}
+
 function detailRow(label, value, mono = false) {
   return `
     <div class="detail-row">
@@ -449,6 +587,7 @@ function renderAll() {
   renderQuarantine();
   renderSandbox();
   renderIocs();
+  renderRemediation();
   renderReports();
 }
 
@@ -456,16 +595,18 @@ async function loadData() {
   if (state.refreshInFlight) return;
   state.refreshInFlight = true;
   try {
-    const [alerts, quarantine, sandbox, reports] = await Promise.all([
+    const [alerts, quarantine, sandbox, reports, remediations] = await Promise.all([
       fetchJson("/api/alerts", "alerts"),
       fetchJson("/api/quarantine", "quarantine"),
       fetchJson("/api/sandbox/results", "results"),
-      fetchJson("/api/reports", "reports")
+      fetchJson("/api/reports", "reports"),
+      fetchJson("/api/remediation", "remediations")
     ]);
     state.alerts = alerts;
     state.quarantine = quarantine;
     state.sandbox = sandbox;
     state.reports = reports;
+    state.remediations = remediations;
     renderAll();
   } finally {
     state.refreshInFlight = false;

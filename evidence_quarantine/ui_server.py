@@ -117,6 +117,54 @@ def load_reports() -> list[dict[str, object]]:
     return []
 
 
+def _artifact_candidates(config: QuarantineConfig) -> list[str]:
+    candidates: list[str] = []
+    for collection in (load_reports(), load_ui_records(config)):
+        for item in collection:
+            artifact_id = item.get("artifact_id") if isinstance(item, dict) else None
+            if artifact_id and str(artifact_id) not in candidates:
+                candidates.append(str(artifact_id))
+
+    ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
+    ready_items: list[object] = []
+    if isinstance(ready_payload, dict):
+        value = ready_payload.get("artifacts") or ready_payload.get("results") or ready_payload.get("quarantine")
+        ready_items = value if isinstance(value, list) else []
+    elif isinstance(ready_payload, list):
+        ready_items = ready_payload
+    for item in ready_items:
+        artifact_id = item.get("artifact_id") if isinstance(item, dict) else None
+        if artifact_id and str(artifact_id) not in candidates:
+            candidates.append(str(artifact_id))
+
+    return candidates[:6]
+
+
+def load_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
+    backend_url = configured_m4_backend_url()
+    remediations: list[dict[str, object]] = []
+
+    remote_payload, _ = load_remote_json(f"{backend_url}/api/remediation", timeout=3.0)
+    if isinstance(remote_payload, dict):
+        remote_results = remote_payload.get("results") or remote_payload.get("remediations")
+        if isinstance(remote_results, list):
+            return [item for item in remote_results if isinstance(item, dict)]
+    if isinstance(remote_payload, list):
+        return [item for item in remote_payload if isinstance(item, dict)]
+
+    for artifact_id in _artifact_candidates(config):
+        payload, error = load_remote_json(f"{backend_url}/api/remediation/{artifact_id}", timeout=2.0)
+        if error or not isinstance(payload, dict):
+            continue
+        remediation = payload.get("remediation") if isinstance(payload.get("remediation"), dict) else payload
+        if isinstance(remediation, dict):
+            item = dict(remediation)
+            item.setdefault("artifact_id", artifact_id)
+            remediations.append(item)
+
+    return remediations
+
+
 def configured_m4_backend_url() -> str:
     return os.getenv("ROOTKIT_DEFENSE_M4_URL", DEFAULT_M4_BACKEND_URL).rstrip("/")
 
@@ -312,6 +360,10 @@ def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequ
                 return
             if parsed.path == "/api/reports":
                 self._json({"count": len(load_reports()), "reports": load_reports()})
+                return
+            if parsed.path == "/api/remediation":
+                remediations = load_remediations(config)
+                self._json({"count": len(remediations), "remediations": remediations})
                 return
             if parsed.path.startswith("/api/quarantine/"):
                 if self._quarantine_api(parsed.path, config):
