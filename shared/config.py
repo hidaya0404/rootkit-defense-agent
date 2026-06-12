@@ -1,5 +1,5 @@
 CONFIG = {
-    "backend_url": "http://localhost:5000",
+    "backend_url": "https://exp-queens-patterns-customs.trycloudflare.com",
     "alert_endpoint": "/api/alerts",
     "scan_interval": 30,
     "log_file": "logs/agent.log",

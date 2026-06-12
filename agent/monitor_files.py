@@ -1,6 +1,8 @@
 import os
 import hashlib
 import json
+import shutil
+from datetime import datetime, timezone
 from agent.monitor_processes import build_alert
 
 SENSITIVE_PATHS = [
@@ -9,6 +11,7 @@ SENSITIVE_PATHS = [
 ]
 SUSPICIOUS_EXEC_DIRS = ['/tmp', '/dev/shm', '/var/tmp']
 BASELINE_FILE = "shared/file_baseline.json"
+QUARANTINE_DIR = "/opt/roottrap/evidence_quarantine/"
 
 def hash_file(path):
     try:
@@ -19,6 +22,33 @@ def hash_file(path):
     except:
         return None
 
+def quarantine_file(file_path, alert_id):
+    """
+    Déplacer le fichier original en quarantaine
+    et bloquer toutes ses permissions
+    """
+    try:
+        os.makedirs(QUARANTINE_DIR, exist_ok=True)
+
+        # Nom sécurisé dans la quarantaine
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        safe_name = f"{timestamp}_{alert_id}.bin"
+        quarantine_path = os.path.join(QUARANTINE_DIR, safe_name)
+
+        # Déplacer l'original (pas copier)
+        shutil.move(file_path, quarantine_path)
+
+        # Bloquer toutes les permissions
+        os.chmod(quarantine_path, 0o000)
+
+        print(f"[QUARANTINE] ✅ Fichier isolé : {file_path} → {quarantine_path}")
+
+        return quarantine_path
+
+    except Exception as e:
+        print(f"[QUARANTINE] ⚠️ Erreur isolation : {e}")
+        return None
+
 def save_file_baseline():
     baseline = {}
     for path in SENSITIVE_PATHS:
@@ -26,7 +56,6 @@ def save_file_baseline():
             baseline[path] = hash_file(path)
     with open(BASELINE_FILE, 'w') as f:
         json.dump(baseline, f, indent=2)
-    print(f"[BASELINE] {len(baseline)} fichiers sauvegardés")
     return baseline
 
 def load_file_baseline():
@@ -42,16 +71,20 @@ def scan_suspicious_executables():
             for fname in os.listdir(directory):
                 fpath = os.path.join(directory, fname)
                 if os.path.isfile(fpath) and os.access(fpath, os.X_OK):
-                    alerts.append(build_alert(
+                    sha256 = hash_file(fpath)
+                    alert = build_alert(
                         module="file_monitor",
                         severity="HIGH",
                         alert_type="EXECUTABLE_IN_SUSPICIOUS_DIR",
-                        description=f"Exécutable trouvé dans répertoire suspect : {fpath}",
+                        description=f"Exécutable suspect isolé : {fpath}",
                         details={
                             "path": fpath,
-                            "sha256": hash_file(fpath)
+                            "sha256": sha256,
+                            "needs_upload": True,
+                            "needs_quarantine": True
                         }
-                    ))
+                    )
+                    alerts.append(alert)
     return alerts
 
 def scan_file_integrity():
@@ -68,7 +101,9 @@ def scan_file_integrity():
                 details={
                     "path": path,
                     "original_sha256": original_hash,
-                    "current_sha256": current_hash
+                    "current_sha256": current_hash,
+                    "needs_upload": True,
+                    "needs_quarantine": False  # fichier système → ne pas déplacer
                 }
             ))
     return alerts
