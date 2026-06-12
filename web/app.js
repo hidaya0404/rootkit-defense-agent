@@ -1,102 +1,25 @@
-const fallback = {
-  alerts: [
-    {
-      alert_id: "ALT-2026-000001",
-      timestamp: "2026-06-11T14:42:10Z",
-      source_module: "file_monitor",
-      severity: "HIGH",
-      type: "EXECUTABLE_IN_SUSPICIOUS_DIR",
-      description: "Executable found in suspicious directory",
-      details: { path: "/tmp/rk_demo.ko", sha256: "9b3a1d9a6f2d5a2f8a66b3f4c3e0154f27a5e779b1db2f7a8bdf6bd463ea2b88" },
-      status: "NEW"
-    },
-    {
-      alert_id: "ALT-2026-000002",
-      timestamp: "2026-06-11T14:49:02Z",
-      source_module: "kernel_monitor",
-      severity: "CRITICAL",
-      type: "UNKNOWN_KERNEL_MODULE",
-      description: "Unknown kernel module detected",
-      details: { module_name: "rk_shadow" },
-      status: "NEW"
-    }
-  ],
-  quarantine: [
-    {
-      artifact_id: "ART-ALT-2026-000001",
-      alert_id: "ALT-2026-000001",
-      filename: "rk_demo.ko",
-      artifact_name: "rk_demo.ko",
-      original_path: "/tmp/rk_demo.ko",
-      evidence_dir: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001",
-      artifact_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
-      quarantine_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
-      sha256: "9b3a1d9a6f2d5a2f8a66b3f4c3e0154f27a5e779b1db2f7a8bdf6bd463ea2b88",
-      md5: "3ee4ff6ea4e9deaff20501858322538d",
-      sha1: "405ca6a5db545c0e9338ce8b7c29c431dfd4e835",
-      rootkit_category: "KERNEL MODULE",
-      suspected_techniques: ["kernel_module_loading", "stealth_persistence"],
-      risk_level: "HIGH",
-      status: "READY_FOR_ANALYSIS",
-      integrity_verified: true,
-      ready_for_sandbox: true,
-      created_at: "2026-06-11T14:44:12Z",
-      audit_log_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/audit.log"
-    }
-  ],
-  sandbox: [
-    {
-      analysis_id: "analysis_20260611_144615",
-      artifact_id: "ART-ALT-2026-000001",
-      alert_id: "ALT-2026-000001",
-      sandbox_status: "COMPLETED",
-      execution_status: "COMPLETED",
-      exit_code: 0,
-      vm_name: "RootkitSandbox",
-      snapshot_name: "clean-state-ssh-v2",
-      analysis_started_at: "2026-06-11T14:46:15Z",
-      analysis_finished_at: "2026-06-11T14:46:28Z",
-      observed_processes: ["bash /tmp/rk_demo.ko"],
-      file_events: { created: ["/tmp/sandbox_created_file.txt"], modified: ["/tmp/sandbox_test_dir/modified.txt"] },
-      network_events: ["tcp 192.168.148.135:22 -> 192.168.148.1:49675"],
-      behavior_summary: "Execution success=True; exit_code=0; files_created=2; network_connections=1",
-      logs_path: "sandbox/results/analysis_20260611_144615"
-    }
-  ],
-  reports: [
-    {
-      report_id: "RPT-ALT-2026-000001",
-      artifact_id: "ART-ALT-2026-000001",
-      alert_id: "ALT-2026-000001",
-      report_path: "reports/generated/ART-ALT-2026-000001.html",
-      pdf_report_path: "reports/generated/ART-ALT-2026-000001.pdf",
-      timestamp: "2026-06-11T14:47:02Z",
-      risk_score: 82,
-      risk_level: "HIGH"
-    }
-  ]
-};
-
 const state = {
   alerts: [],
   quarantine: [],
   sandbox: [],
   reports: [],
+  remediations: [],
   activeView: "dashboard",
   quarantineFilter: "ALL",
-  query: ""
+  query: "",
+  connectionErrors: {},
+  refreshInFlight: false
 };
 
-const bootSteps = [
-  { progress: 7, status: "mounting secure workspace...", line: "[ OK ] mounted /opt/rootkit-defense" },
-  { progress: 15, status: "loading agent telemetry...", line: "[ OK ] agent telemetry channel online" },
-  { progress: 27, status: "checking quarantine vault...", line: "[ OK ] evidence vault integrity policy loaded" },
-  { progress: 39, status: "binding sandbox handoff...", line: "[ OK ] isolated runtime handoff endpoint ready" },
-  { progress: 52, status: "hydrating IOC index...", line: "[ OK ] yara/ioc analyzer cache warm" },
-  { progress: 66, status: "verifying dashboard API...", line: "[ OK ] /api/health responsive" },
-  { progress: 78, status: "loading threat map...", line: "[ OK ] network telemetry renderer initialized" },
-  { progress: 91, status: "arming operator console...", line: "[ OK ] live SOC dashboard armed" },
-  { progress: 100, status: "ready.", line: "[ READY ] rootkit-defense agent console online" }
+const AUTO_REFRESH_MS = 5000;
+
+const fallbackBootChecks = [
+  {
+    id: "ui",
+    label: "dashboard api",
+    status: "FAIL",
+    line: "/api/boot/checks unavailable; real integration checks could not run"
+  }
 ];
 
 let bootDone = false;
@@ -129,14 +52,16 @@ function normalizeList(payload, key) {
   return [];
 }
 
-async function fetchJson(url, fallbackValue, key) {
+async function fetchJson(url, key) {
   try {
     const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) throw new Error(String(response.status));
     const list = normalizeList(await response.json(), key);
-    return list.length ? list : fallbackValue;
-  } catch {
-    return fallbackValue;
+    state.connectionErrors[url] = null;
+    return list;
+  } catch (error) {
+    state.connectionErrors[url] = error?.message || "fetch failed";
+    return [];
   }
 }
 
@@ -193,7 +118,17 @@ function allIncidents() {
     raw: result
   }));
 
-  return [...alerts, ...quarantine, ...sandbox]
+  const remediations = state.remediations.map((plan) => ({
+    timestamp: plan.generated_at || plan.created_at,
+    alert_id: plan.alert_id,
+    source: "remediation",
+    event: selectedPlaybook(plan) || "AI remediation",
+    severity: plan.risk_level || aiRecommendation(plan).risk_level || "MEDIUM",
+    action: remediationDecision(plan) || "PENDING",
+    raw: plan
+  }));
+
+  return [...alerts, ...quarantine, ...sandbox, ...remediations]
     .filter((item) => queryMatches(item.raw))
     .sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
 }
@@ -203,6 +138,10 @@ function matchingQuarantine() {
     const filterOk = state.quarantineFilter === "ALL" || record.status === state.quarantineFilter;
     return filterOk && queryMatches(record);
   });
+}
+
+function matchingRemediations() {
+  return state.remediations.filter(queryMatches);
 }
 
 function setDonut(id, value, total, offset) {
@@ -275,12 +214,78 @@ function renderRecentQuarantine() {
   `).join("") || `<div class="mini-row"><span>NO ARTIFACTS</span><strong>0</strong></div>`;
 }
 
+function aiRecommendation(plan) {
+  return plan?.ai_recommendation || plan?.analysis?.ai_recommendation || {};
+}
+
+function selectedPlaybook(plan) {
+  const selected = aiRecommendation(plan).selected_playbook || plan?.selected_playbook || {};
+  return selected.title || selected.id || plan?.playbook || "";
+}
+
+function remediationDecision(plan) {
+  return plan?.decision || aiRecommendation(plan).decision || "";
+}
+
+function remediationActions(plan) {
+  if (Array.isArray(plan?.actions) && plan.actions.length) {
+    return plan.actions.map((action) => ({
+      title: action.title || action.status || "action",
+      body: action.action || action.command || JSON.stringify(action),
+      status: action.status || "RECOMMENDED"
+    }));
+  }
+
+  const ai = aiRecommendation(plan);
+  if (Array.isArray(ai.recommended_actions)) {
+    return ai.recommended_actions.map((action) => ({
+      title: "Recommandation AI",
+      body: action,
+      status: "AI_RECOMMENDED"
+    }));
+  }
+
+  return [];
+}
+
+function renderRemediationSummary() {
+  const items = matchingRemediations();
+  const humanValidation = items.filter((item) => item.requires_human_validation !== false).length;
+  const critical = items.filter((item) => severityClass(item.risk_level || aiRecommendation(item).risk_level) === "critical").length;
+  const latest = items[0];
+
+  $("#remediation-summary").innerHTML = `
+    <div class="remediation-kpis">
+      <article><span>plans</span><strong>${items.length}</strong></article>
+      <article><span>critical</span><strong>${critical}</strong></article>
+      <article><span>human validation</span><strong>${humanValidation}</strong></article>
+    </div>
+    ${latest ? `
+      <div class="remediation-latest">
+        <span>${escapeHtml(latest.artifact_id || latest.alert_id || "latest artifact")}</span>
+        <strong>${escapeHtml(selectedPlaybook(latest) || "Playbook AI en attente")}</strong>
+        <em>${escapeHtml(remediationDecision(latest) || "Decision en attente")}</em>
+      </div>
+    ` : `<div class="empty-state compact"><strong>Aucun plan</strong><span>en attente de la remediation M4</span></div>`}
+  `;
+}
+
 function renderTrend() {
-  const count = Math.max(1, state.alerts.length + state.quarantine.length + state.sandbox.length);
-  const bars = Array.from({ length: 24 }, (_, index) => {
-    const seed = ((index * 7 + count * 5) % 17) + (index % 6);
-    const height = Math.max(8, Math.min(100, seed * 5));
-    return `<div class="trend-bar" title="${index}:00" style="height:${height}%"></div>`;
+  const now = new Date();
+  const buckets = Array.from({ length: 24 }, () => 0);
+  for (const item of allIncidents()) {
+    const timestamp = Date.parse(item.timestamp || "");
+    if (Number.isNaN(timestamp)) continue;
+    const ageHours = Math.floor((now.getTime() - timestamp) / 3600000);
+    if (ageHours >= 0 && ageHours < 24) {
+      buckets[23 - ageHours] += 1;
+    }
+  }
+  const max = Math.max(1, ...buckets);
+  const bars = buckets.map((count, index) => {
+    const hour = new Date(now.getTime() - (23 - index) * 3600000).getHours();
+    const height = count ? Math.max(10, Math.round((count / max) * 100)) : 4;
+    return `<div class="trend-bar" title="${hour}:00 - ${count} event(s)" style="height:${height}%"></div>`;
   });
   $("#trend-chart").innerHTML = bars.join("");
 }
@@ -302,9 +307,12 @@ function renderOverview() {
   renderThreatSummary();
   renderNetworkMap();
   renderRecentQuarantine();
+  renderRemediationSummary();
   renderTrend();
   renderActivityLog();
-  $("#last-update").textContent = `LAST UPDATE: ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+  const errors = Object.values(state.connectionErrors).filter(Boolean).length;
+  const suffix = errors ? ` / API WARN: ${errors}` : " / LIVE";
+  $("#last-update").textContent = `LAST UPDATE: ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}${suffix}`;
 }
 
 function renderAlerts() {
@@ -477,6 +485,72 @@ function renderReports() {
   $("#reports-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucun rapport</td></tr>`;
 }
 
+function renderRemediation() {
+  const items = matchingRemediations();
+  const rows = items.map((plan, index) => {
+    const ai = aiRecommendation(plan);
+    const riskLevel = plan.risk_level || ai.risk_level || "UNKNOWN";
+    const validation = plan.requires_human_validation === false ? "AUTO" : "HUMAN";
+    return `
+      <tr data-remediation-index="${index}">
+        <td class="mono">${escapeHtml(plan.artifact_id || plan.alert_id || "-")}</td>
+        <td><span class="badge ${severityClass(riskLevel)}">${escapeHtml(riskLevel)}</span></td>
+        <td>${escapeHtml(remediationDecision(plan) || "-")}</td>
+        <td>${escapeHtml(selectedPlaybook(plan) || "-")}</td>
+        <td><span class="badge ${validation === "HUMAN" ? "medium" : "ready"}">${validation}</span></td>
+      </tr>
+    `;
+  });
+
+  $("#remediation-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucun plan de remediation recu</td></tr>`;
+  $$("#remediation-table tr[data-remediation-index]").forEach((row) => {
+    row.addEventListener("click", () => {
+      $$("#remediation-table tr").forEach((item) => item.classList.remove("selected"));
+      row.classList.add("selected");
+      renderRemediationDetail(items[Number(row.dataset.remediationIndex)]);
+    });
+  });
+  renderRemediationDetail(items[0]);
+}
+
+function renderRemediationDetail(plan) {
+  const panel = $("#remediation-detail");
+  if (!plan) {
+    panel.innerHTML = emptyState("Selectionner un plan", "AI remediation advisor");
+    return;
+  }
+
+  const ai = aiRecommendation(plan);
+  const model = ai.model || {};
+  const selected = ai.selected_playbook || {};
+  const actions = remediationActions(plan).slice(0, 12);
+  const matchedSignals = Array.isArray(ai.matched_signals) ? ai.matched_signals.join(", ") : "";
+
+  panel.innerHTML = `
+    <div class="detail-stack">
+      <div class="detail-title">
+        <strong>${escapeHtml(plan.artifact_id || plan.alert_id || "remediation")}</strong>
+        <span>${escapeHtml(selected.title || selected.id || "AI remediation advisor")}</span>
+      </div>
+      ${detailRow("model", `${model.name || "RDA-Remediation-AI"} ${model.version || ""}`)}
+      ${detailRow("external api", model.external_api === true ? "YES" : "NO")}
+      ${detailRow("confidence", valueOrDash(ai.confidence))}
+      ${detailRow("risk", `${valueOrDash(plan.risk_level || ai.risk_level)} / ${valueOrDash(plan.risk_score || ai.risk_score)}`)}
+      ${detailRow("decision", remediationDecision(plan), true)}
+      ${detailRow("matched signals", matchedSignals || "-", true)}
+      <div class="remediation-actions">
+        ${actions.map((action) => `
+          <article>
+            <span class="badge ${severityClass(action.status)}">${escapeHtml(action.status)}</span>
+            <strong>${escapeHtml(action.title)}</strong>
+            <p>${escapeHtml(action.body)}</p>
+          </article>
+        `).join("") || `<div class="empty-state compact"><strong>Aucune action</strong><span>M4 n'a retourne aucune action</span></div>`}
+      </div>
+    </div>
+  `;
+}
+
 function detailRow(label, value, mono = false) {
   return `
     <div class="detail-row">
@@ -512,21 +586,30 @@ function renderAll() {
   renderQuarantine();
   renderSandbox();
   renderIocs();
+  renderRemediation();
   renderReports();
 }
 
 async function loadData() {
-  const [alerts, quarantine, sandbox, reports] = await Promise.all([
-    fetchJson("/api/alerts", fallback.alerts, "alerts"),
-    fetchJson("/api/quarantine", fallback.quarantine, "quarantine"),
-    fetchJson("/api/sandbox/results", fallback.sandbox, "results"),
-    fetchJson("/api/reports", fallback.reports, "reports")
-  ]);
-  state.alerts = alerts;
-  state.quarantine = quarantine;
-  state.sandbox = sandbox;
-  state.reports = reports;
-  renderAll();
+  if (state.refreshInFlight) return;
+  state.refreshInFlight = true;
+  try {
+    const [alerts, quarantine, sandbox, reports, remediations] = await Promise.all([
+      fetchJson("/api/alerts", "alerts"),
+      fetchJson("/api/quarantine", "quarantine"),
+      fetchJson("/api/sandbox/results", "results"),
+      fetchJson("/api/reports", "reports"),
+      fetchJson("/api/remediation", "remediations")
+    ]);
+    state.alerts = alerts;
+    state.quarantine = quarantine;
+    state.sandbox = sandbox;
+    state.reports = reports;
+    state.remediations = remediations;
+    renderAll();
+  } finally {
+    state.refreshInFlight = false;
+  }
 }
 
 function finishBoot() {
@@ -540,7 +623,41 @@ function finishBoot() {
   window.setTimeout(() => boot.remove(), 460);
 }
 
-function runBootSequence() {
+function bootStatusClass(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "ok") return "ok";
+  if (normalized === "warn" || normalized === "warning") return "warn";
+  return "fail";
+}
+
+function bootStatusToken(status) {
+  const normalized = String(status || "").toUpperCase();
+  if (normalized === "OK") return "OK";
+  if (normalized === "WARN" || normalized === "WARNING") return "WARN";
+  return "FAIL";
+}
+
+function setBootModule(check) {
+  const moduleStatus = document.getElementById(`boot-${check.id}`);
+  if (!moduleStatus) return;
+  const token = bootStatusToken(check.status);
+  moduleStatus.textContent = `[ ${token} ]`;
+  moduleStatus.classList.remove("ok", "warn", "fail");
+  moduleStatus.classList.add(bootStatusClass(check.status));
+}
+
+async function fetchBootChecks() {
+  try {
+    const response = await fetch("/api/boot/checks", { cache: "no-store" });
+    if (!response.ok) throw new Error(String(response.status));
+    const payload = await response.json();
+    return Array.isArray(payload.checks) ? payload.checks : fallbackBootChecks;
+  } catch {
+    return fallbackBootChecks;
+  }
+}
+
+async function runBootSequence() {
   const boot = $("#boot-screen");
   const log = $("#boot-log");
   const progress = $("#boot-progress");
@@ -548,7 +665,29 @@ function runBootSequence() {
   const skip = $("#boot-skip");
   if (!boot || !log || !progress || !status) return;
 
-  log.textContent = "";
+  log.textContent = "root@rda:~$ ./rda-console --real-health-check\n";
+  status.textContent = "running real module checks...";
+
+  const checks = await fetchBootChecks();
+  const bootSteps = [
+    {
+      progress: 8,
+      status: "connecting to local dashboard API...",
+      line: "root@rda:~$ GET /api/boot/checks"
+    },
+    ...checks.map((check, index) => ({
+      progress: Math.min(92, 18 + index * Math.max(12, Math.floor(68 / Math.max(checks.length, 1)))),
+      status: `checking ${check.label || check.id}...`,
+      line: `[ ${bootStatusToken(check.status)} ] ${check.line || check.label || check.id}`,
+      check
+    })),
+    {
+      progress: 100,
+      status: "real checks completed.",
+      line: "[ READY ] press ENTER to open dashboard"
+    }
+  ];
+
   bootSteps.forEach((step, index) => {
     window.setTimeout(() => {
       if (bootDone) return;
@@ -556,6 +695,9 @@ function runBootSequence() {
       status.textContent = step.status;
       log.textContent += `${step.line}\n`;
       log.scrollTop = log.scrollHeight;
+      if (step.check) {
+        setBootModule(step.check);
+      }
       if (index === bootSteps.length - 1) {
         window.setTimeout(finishBoot, 520);
       }
@@ -590,3 +732,4 @@ function bindEvents() {
 bindEvents();
 runBootSequence();
 loadData();
+window.setInterval(loadData, AUTO_REFRESH_MS);

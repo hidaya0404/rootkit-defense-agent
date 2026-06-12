@@ -64,6 +64,7 @@
           <button class="nav-item" type="button" data-view="quarantine"><span>Q</span>Quarantaine</button>
           <button class="nav-item" type="button" data-view="sandbox"><span>S</span>Analyses sandbox</button>
           <button class="nav-item" type="button" data-view="iocs"><span>I</span>Base IOC</button>
+          <button class="nav-item" type="button" data-view="remediation"><span>A</span>Remediation AI</button>
           <button class="nav-item" type="button" data-view="reports"><span>R</span>Rapports</button>
           <button class="nav-item" type="button" data-view="config"><span>#</span>Configuration</button>
         </nav>
@@ -71,7 +72,7 @@
         <footer class="agent-status">
           <span class="status-led"></span>
           <div>
-            <strong>AGENT STATUS: OK</strong>
+            <strong>LIVE REFRESH: 5S</strong>
             <span id="last-update">LAST UPDATE: --</span>
           </div>
         </footer>
@@ -165,6 +166,14 @@
               <div class="trend-chart" id="trend-chart"></div>
             </section>
 
+            <section class="tile remediation-tile">
+              <header class="tile-header">
+                <h2>Remediation AI</h2>
+                <span class="chip">AI</span>
+              </header>
+              <div class="remediation-summary" id="remediation-summary"></div>
+            </section>
+
             <section class="tile log-tile">
               <header class="tile-header">
                 <h2>Journal d'activite recent</h2>
@@ -246,6 +255,23 @@
               <header class="tile-header"><h2>Scoring risque</h2><span class="chip">SCORE</span></header>
               <div id="score-board" class="score-board"></div>
             </section>
+          </div>
+        </section>
+
+        <section class="view" id="remediation-view" data-title="Remediation AI">
+          <div class="work-grid remediation-work-grid">
+            <section class="tile">
+              <header class="tile-header"><h2>Plans de remediation</h2><span class="chip">AI</span></header>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>artefact</th><th>risque</th><th>decision</th><th>playbook</th><th>validation</th></tr>
+                  </thead>
+                  <tbody id="remediation-table"></tbody>
+                </table>
+              </div>
+            </section>
+            <aside class="tile detail-panel" id="remediation-detail"></aside>
           </div>
         </section>
 
