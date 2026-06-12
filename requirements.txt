@@ -1,6 +1,26 @@
+
+
 psutil>=5.9
 
 # Optional API/dev dependencies:
 fastapi>=0.110
 uvicorn>=0.29
 pytest>=8
+
+
+
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+jinja2
+reportlab
+yara-python
+
+
+
+pytest
+psutil
+requests
+python-magic
+

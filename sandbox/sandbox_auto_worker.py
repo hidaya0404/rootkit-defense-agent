@@ -1,0 +1,185 @@
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import requests
+
+from sandbox_config import BACKEND_URL
+
+
+READY_ENDPOINT = "/api/quarantine/ready"
+PROCESSED_FILE = Path("sandbox/processed_artifacts.json")
+DOWNLOAD_DIR = Path("sandbox/downloaded_artifacts")
+METADATA_DIR = Path("sandbox/auto_metadata")
+
+
+def load_processed():
+    if PROCESSED_FILE.exists():
+        return set(json.loads(PROCESSED_FILE.read_text(encoding="utf-8")))
+    return set()
+
+
+def save_processed(processed):
+    PROCESSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PROCESSED_FILE.write_text(
+        json.dumps(sorted(processed), indent=4, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def get_ready_artifacts():
+    url = BACKEND_URL.rstrip("/") + READY_ENDPOINT
+    print(f"[+] Verification artefacts prets : {url}")
+
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+
+    data = response.json()
+    return data.get("artifacts", [])
+
+
+def download_artifact(artifact):
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    artifact_id = artifact["artifact_id"]
+    download_url = artifact["download_url"]
+
+    url = BACKEND_URL.rstrip("/") + download_url
+    local_path = DOWNLOAD_DIR / f"{artifact_id}.bin"
+
+    print(f"[+] Telechargement artefact : {artifact_id}")
+    print(f"[+] URL : {url}")
+
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+
+    local_path.write_bytes(response.content)
+
+    expected_sha256 = artifact.get("sha256")
+    actual_sha256 = sha256_file(local_path)
+
+    if expected_sha256 and actual_sha256.lower() != expected_sha256.lower():
+        raise ValueError(
+            f"SHA256 invalide pour {artifact_id}: "
+            f"attendu={expected_sha256}, obtenu={actual_sha256}"
+        )
+
+    print("[+] SHA256 artefact telecharge valide")
+    return local_path
+
+
+def create_metadata_file(artifact):
+    METADATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    artifact_id = artifact["artifact_id"]
+    metadata_path = METADATA_DIR / f"{artifact_id}.json"
+
+    metadata = {
+        "artifact_id": artifact.get("artifact_id"),
+        "alert_id": artifact.get("alert_id"),
+        "filename": artifact.get("filename"),
+        "sha256": artifact.get("sha256"),
+        "download_url": artifact.get("download_url"),
+        "status": artifact.get("status"),
+        "integrity_verified": artifact.get("integrity_verified"),
+        "ready_for_sandbox": artifact.get("ready_for_sandbox"),
+        "quarantine_path": artifact.get("quarantine_path"),
+        "metadata_path": artifact.get("metadata_path"),
+        "hashes_path": artifact.get("hashes_path"),
+        "manifest_path": artifact.get("manifest_path"),
+    }
+
+    metadata_path.write_text(
+        json.dumps(metadata, indent=4, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+    return metadata_path
+
+
+def run_vmware_orchestrator(metadata_path, artifact_path):
+    cmd = [
+        sys.executable,
+        "sandbox/sandbox_orchestrator_vmware.py",
+        "--metadata",
+        str(metadata_path),
+        "--artifact",
+        str(artifact_path),
+    ]
+
+    print("[+] Lancement automatique analyse VMware")
+    print("[CMD]", " ".join(cmd))
+
+    result = subprocess.run(cmd)
+    return result.returncode
+
+
+def process_once():
+    processed = load_processed()
+    artifacts = get_ready_artifacts()
+
+    print(f"[+] Nombre artefacts prets : {len(artifacts)}")
+
+    for artifact in artifacts:
+        artifact_id = artifact.get("artifact_id")
+
+        if not artifact_id:
+            continue
+
+        if artifact_id in processed:
+            print(f"[-] Deja traite : {artifact_id}")
+            continue
+
+        if not artifact.get("ready_for_sandbox"):
+            print(f"[-] Non pret sandbox : {artifact_id}")
+            continue
+
+        try:
+            artifact_path = download_artifact(artifact)
+            metadata_path = create_metadata_file(artifact)
+
+            code = run_vmware_orchestrator(metadata_path, artifact_path)
+
+            if code == 0:
+                print(f"[+] Analyse terminee pour {artifact_id}")
+                processed.add(artifact_id)
+                save_processed(processed)
+            else:
+                print(f"[!] Analyse echouee pour {artifact_id}, code={code}")
+
+        except Exception as e:
+            print(f"[!] Erreur traitement {artifact_id}: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true", help="Executer une seule verification")
+    parser.add_argument("--interval", type=int, default=30, help="Intervalle polling en secondes")
+    args = parser.parse_args()
+
+    if args.once:
+        process_once()
+        return
+
+    print("[+] M3 Auto Worker demarre")
+    print("[+] Mode automatique : GET ready -> download -> VMware -> POST M4")
+
+    while True:
+        process_once()
+        time.sleep(args.interval)
+
+
+if __name__ == "__main__":
+    main()

@@ -25,3 +25,39 @@ shared/file_baseline.json
 # OS
 .DS_Store
 Thumbs.db
+
+
+sandbox/sandbox_config.py
+sandbox/results/*
+!sandbox/results/.gitkeep
+=======
+# M4 local environment
+venv/
+__pycache__/
+*.pyc
+
+# M4 generated data
+backend/data/
+reports/generated/
+uploads/quarantine/
+logs/*.log
+
+# M4 test artifacts
+test_artifact.txt
+cloudflare_artifact.txt
+cloudflared-linux-amd64.deb
+
+
+sandbox/test_metadata.json
+
+
+# M3 sandbox generated/local files
+sandbox/results/
+sandbox/downloaded_artifacts/
+sandbox/auto_metadata/
+sandbox/processed_artifacts.json
+sandbox/m2_artifacts/
+sandbox/m2_metadata.json
+m2_to_m3_handoff/
+sandbox/sandbox_config.py
+sandbox/auto_metadata/
