@@ -13,7 +13,7 @@ def _int_env(name: str, default: int) -> int:
 CONFIG = {
     "backend_url": os.getenv(
         "ROOTKIT_DEFENSE_M4_URL",
-        "https://stopped-cet-musician-render.trycloudflare.com",
+        "https://accommodations-requiring-henry-workshops.trycloudflare.com",
     ).rstrip("/"),
     "alert_endpoint": os.getenv("ROOTRAP_ALERT_ENDPOINT", "/api/alerts"),
     "scan_interval": _int_env("ROOTRAP_SCAN_INTERVAL", 30),
