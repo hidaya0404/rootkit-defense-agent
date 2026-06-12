@@ -38,7 +38,37 @@ class RootkitArtifactClassifierTest(unittest.TestCase):
             self.assertEqual(profile.category, "shared_library_hook_suspect")
             self.assertIn("shared_library_injection", profile.suspected_techniques)
 
+    def test_classifies_process_hiding_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sample = Path(temp_dir) / "proc_mismatch.json"
+            sample.write_text("{}", encoding="utf-8")
+
+            profile = RootkitArtifactClassifier().classify(sample)
+
+            self.assertEqual(profile.category, "process_hiding_suspect")
+            self.assertIn("hidden_process", profile.suspected_techniques)
+
+    def test_classifies_network_hiding_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sample = Path(temp_dir) / "network_mismatch.json"
+            sample.write_text("{}", encoding="utf-8")
+
+            profile = RootkitArtifactClassifier().classify(sample)
+
+            self.assertEqual(profile.category, "hidden_network_connection_suspect")
+            self.assertIn("network_connection_hiding", profile.suspected_techniques)
+
+    def test_classifies_log_tampering_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sample = Path(temp_dir) / "var" / "log" / "auth.log.tamper-marker"
+            sample.parent.mkdir(parents=True)
+            sample.write_text("simulated", encoding="utf-8")
+
+            profile = RootkitArtifactClassifier().classify(sample)
+
+            self.assertEqual(profile.category, "log_tampering_suspect")
+            self.assertIn("log_wiping", profile.suspected_techniques)
+
 
 if __name__ == "__main__":
     unittest.main()
-

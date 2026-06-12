@@ -23,16 +23,20 @@ class BackendClientTest(unittest.TestCase):
             "integrity_verified": True,
             "ready_for_sandbox": True,
             "created_at": "2026-05-28T19:22:07Z",
+            "source_alert_status": "ARTIFACT_READY",
         }
 
         manifest = build_quarantine_manifest(record, download_url="/quarantine/ALT-1/download")
 
         self.assertEqual(manifest["artifact_id"], "ART-ALT-1")
+        self.assertEqual(manifest["timestamp"], "2026-05-28T19:22:07Z")
         self.assertEqual(manifest["filename"], "rk_demo.ko")
         self.assertEqual(manifest["quarantine_path"], "/q/ALT-1/artifact.bin")
         self.assertEqual(manifest["stored_path"], "/q/ALT-1/artifact.bin")
         self.assertEqual(manifest["md5"], "md5")
         self.assertEqual(manifest["sha1"], "sha1")
+        self.assertEqual(manifest["hashes"]["sha256"], "sha256")
+        self.assertEqual(manifest["source_alert_status"], "ARTIFACT_READY")
         self.assertEqual(manifest["download_url"], "/quarantine/ALT-1/download")
 
 

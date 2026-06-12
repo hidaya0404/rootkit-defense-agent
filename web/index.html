@@ -3,93 +3,276 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Rootkit Defense Agent - Quarantaine</title>
+    <title>Rootkit Defense Agent</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
+    <div class="boot-screen" id="boot-screen" role="status" aria-live="polite">
+      <div class="boot-frame">
+        <section class="boot-identity">
+          <svg class="composite-logo large" viewBox="0 0 140 140" role="img" aria-label="Rootkit Defense Agent">
+            <path class="logo-frame" d="M70 8 116 25v36c0 34-19 57-46 70-27-13-46-36-46-70V25L70 8Z"/>
+            <path class="logo-grid" d="M70 23v94M32 48h76M35 86h70M48 30l44 80M92 30l-44 80"/>
+            <path class="logo-horns" d="M48 44C33 35 31 20 39 13c10 17 20 21 31 21s21-4 31-21c8 7 6 22-9 31"/>
+            <path class="logo-mane" d="M70 38 77 50l15-5-5 16 14 9-16 5 5 16-15-6-5 15-7-15-15 6 5-16-16-5 14-9-5-16 15 5 7-12Z"/>
+            <path class="logo-scorpion" d="M44 82c10 12 25 16 39 10 11-5 14-18 6-24-7-5-16-1-16 7 0 6 6 9 12 6M44 82 28 97M44 82l-18-4M93 55c17 6 24 20 18 34-4 10-15 15-25 12"/>
+            <path class="logo-wave" d="M33 112c9-9 18 9 27 0s18 9 27 0 16 6 21 2"/>
+          </svg>
+          <div class="boot-text">
+            <span>secure boot sequence</span>
+            <strong>ROOTKIT DEFENSE AGENT</strong>
+            <em>Composite Cybernetic Vigilance</em>
+          </div>
+          <div class="boot-progress" aria-label="Progression du chargement">
+            <span id="boot-progress"></span>
+          </div>
+          <p id="boot-status">initializing operator console...</p>
+        </section>
+
+        <section class="boot-terminal" aria-label="Journal de demarrage">
+          <header>
+            <span>rda-init</span>
+            <strong>tty-sec0</strong>
+          </header>
+          <pre id="boot-log"></pre>
+        </section>
+
+        <button class="boot-skip" id="boot-skip" type="button">skip boot</button>
+      </div>
+    </div>
+
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="brand">
-          <span class="brand-mark">RD</span>
+        <header class="brand">
+          <svg class="composite-logo" viewBox="0 0 140 140" role="img" aria-label="Rootkit Defense Agent">
+            <path class="logo-frame" d="M70 8 116 25v36c0 34-19 57-46 70-27-13-46-36-46-70V25L70 8Z"/>
+            <path class="logo-grid" d="M70 23v94M32 48h76M35 86h70M48 30l44 80M92 30l-44 80"/>
+            <path class="logo-horns" d="M48 44C33 35 31 20 39 13c10 17 20 21 31 21s21-4 31-21c8 7 6 22-9 31"/>
+            <path class="logo-mane" d="M70 38 77 50l15-5-5 16 14 9-16 5 5 16-15-6-5 15-7-15-15 6 5-16-16-5 14-9-5-16 15 5 7-12Z"/>
+            <path class="logo-scorpion" d="M44 82c10 12 25 16 39 10 11-5 14-18 6-24-7-5-16-1-16 7 0 6 6 9 12 6M44 82 28 97M44 82l-18-4M93 55c17 6 24 20 18 34-4 10-15 15-25 12"/>
+            <path class="logo-wave" d="M33 112c9-9 18 9 27 0s18 9 27 0 16 6 21 2"/>
+          </svg>
           <div>
-            <strong>Rootkit Defense</strong>
-            <span>Evidence Console</span>
+            <strong>ROOTKIT DEFENSE AGENT</strong>
+            <span>Composite Cybernetic Vigilance</span>
           </div>
-        </div>
+        </header>
+
         <nav class="nav-list" aria-label="Navigation principale">
-          <button class="nav-item active" type="button">Alertes</button>
-          <button class="nav-item" type="button">Quarantaine</button>
-          <button class="nav-item" type="button">IOC</button>
-          <button class="nav-item" type="button">Rapports</button>
+          <button class="nav-item active" type="button" data-view="dashboard"><span>⌘</span>Tableau de bord</button>
+          <button class="nav-item" type="button" data-view="alerts"><span>!</span>Alertes actives</button>
+          <button class="nav-item" type="button" data-view="quarantine"><span>Q</span>Quarantaine</button>
+          <button class="nav-item" type="button" data-view="sandbox"><span>S</span>Analyses sandbox</button>
+          <button class="nav-item" type="button" data-view="iocs"><span>I</span>Base IOC</button>
+          <button class="nav-item" type="button" data-view="reports"><span>R</span>Rapports</button>
+          <button class="nav-item" type="button" data-view="config"><span>#</span>Configuration</button>
         </nav>
+
+        <footer class="agent-status">
+          <span class="status-led"></span>
+          <div>
+            <strong>AGENT STATUS: OK</strong>
+            <span id="last-update">LAST UPDATE: --</span>
+          </div>
+        </footer>
       </aside>
 
       <main class="workspace">
         <header class="topbar">
           <div>
-            <h1>Quarantaine</h1>
-            <p>Artefacts isoles, preuves conservees et handoff sandbox.</p>
+            <span class="terminal-line">root@rda:/opt/rootkit-defense# ./rda-console --live</span>
+            <h1 id="view-title">Tableau de bord</h1>
           </div>
-          <div class="health-pill">
-            <span class="dot"></span>
-            Agent actif
+          <div class="top-actions">
+            <label class="search-box">
+              <span>FILTER</span>
+              <input id="global-search" type="search" placeholder="grep alert_id hash path ioc">
+            </label>
+            <button class="icon-button" id="refresh-data" type="button" aria-label="Rafraichir">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 12a8 8 0 0 1-14.2 5M4 12A8 8 0 0 1 18.2 7M18 3v4h-4M6 21v-4h4"/>
+              </svg>
+            </button>
           </div>
         </header>
 
-        <section class="metrics" aria-label="Indicateurs">
-          <article class="metric">
-            <span>Alertes</span>
-            <strong id="metric-alerts">0</strong>
-          </article>
-          <article class="metric">
-            <span>Pretes sandbox</span>
-            <strong id="metric-ready">0</strong>
-          </article>
-          <article class="metric">
-            <span>Integrite validee</span>
-            <strong id="metric-integrity">0</strong>
-          </article>
-          <article class="metric">
-            <span>Risque eleve</span>
-            <strong id="metric-high">0</strong>
-          </article>
+        <section class="view active" id="dashboard-view" data-title="Tableau de bord">
+          <div class="soc-grid">
+            <section class="tile threat-tile">
+              <header class="tile-header">
+                <h2>Resume des menaces</h2>
+                <span class="chip live">LIVE</span>
+              </header>
+              <div class="threat-layout">
+                <div class="severity-stack">
+                  <article><span>CRITIQUE</span><strong id="sev-critical">0</strong></article>
+                  <article><span>ELEVE</span><strong id="sev-high">0</strong></article>
+                  <article><span>MOYEN</span><strong id="sev-medium">0</strong></article>
+                  <article><span>FAIBLE</span><strong id="sev-low">0</strong></article>
+                </div>
+                <div class="donut-wrap">
+                  <svg class="donut" viewBox="0 0 120 120" aria-label="Threat type distribution">
+                    <circle class="donut-bg" cx="60" cy="60" r="44"/>
+                    <circle id="donut-critical" class="donut-seg critical" cx="60" cy="60" r="44"/>
+                    <circle id="donut-high" class="donut-seg high" cx="60" cy="60" r="44"/>
+                    <circle id="donut-medium" class="donut-seg medium" cx="60" cy="60" r="44"/>
+                    <text id="donut-total" x="60" y="57" text-anchor="middle">0</text>
+                    <text x="60" y="73" text-anchor="middle">alerts</text>
+                  </svg>
+                </div>
+              </div>
+              <div class="threat-types" id="threat-types"></div>
+            </section>
+
+            <section class="tile map-tile">
+              <header class="tile-header">
+                <h2>Carte des connexions suspectes</h2>
+                <span class="chip">NET</span>
+              </header>
+              <div class="threat-map">
+                <svg viewBox="0 0 640 300" aria-label="Stylized threat map">
+                  <path class="map-land" d="M88 100c34-40 92-54 143-38 52 17 76 61 135 48 75-17 126 7 176 48 35 29 37 70 9 94-42 36-98 7-149 8-70 1-121 44-187 19-40-15-56-58-92-76-47-23-67-67-35-103Z"/>
+                  <path class="map-land second" d="M395 60c30-24 74-14 103 6 35 24 69 18 94 45 24 27 19 73-11 88-30 16-74-4-101-21-36-23-89-7-109-43-14-24 1-57 24-75Z"/>
+                  <path class="map-link" d="M130 210C225 95 346 80 518 160"/>
+                  <path class="map-link alt" d="M112 118C244 240 390 250 548 98"/>
+                  <path class="map-link warn" d="M230 73C285 174 395 201 490 236"/>
+                  <circle class="hotspot critical" cx="130" cy="210" r="7"/>
+                  <circle class="hotspot high" cx="286" cy="119" r="6"/>
+                  <circle class="hotspot medium" cx="518" cy="160" r="7"/>
+                  <circle class="hotspot low" cx="548" cy="98" r="5"/>
+                </svg>
+                <div class="map-stats">
+                  <span>SSH</span>
+                  <strong id="network-count">0</strong>
+                  <span>observed links</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="tile quarantine-tile">
+              <header class="tile-header">
+                <h2>Quarantaine recente</h2>
+                <span class="chip">VAULT</span>
+              </header>
+              <div class="mini-list" id="recent-quarantine"></div>
+            </section>
+
+            <section class="tile trend-tile">
+              <header class="tile-header">
+                <h2>Tendance 24h</h2>
+                <span class="chip">TIME</span>
+              </header>
+              <div class="trend-chart" id="trend-chart"></div>
+            </section>
+
+            <section class="tile log-tile">
+              <header class="tile-header">
+                <h2>Journal d'activite recent</h2>
+                <span class="chip">RAW</span>
+              </header>
+              <div class="table-wrap compact">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>timestamp</th>
+                      <th>agent</th>
+                      <th>event</th>
+                      <th>severity</th>
+                      <th>action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="activity-log"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
         </section>
 
-        <section class="toolbar" aria-label="Filtres">
-          <div class="segmented" role="tablist">
-            <button class="segment active" type="button" data-filter="ALL">Tous</button>
-            <button class="segment" type="button" data-filter="READY_FOR_ANALYSIS">Ready</button>
-            <button class="segment" type="button" data-filter="REJECTED">Rejetes</button>
+        <section class="view" id="alerts-view" data-title="Alertes actives">
+          <div class="work-grid">
+            <section class="tile">
+              <header class="tile-header"><h2>Alertes actives</h2><span class="chip">AGENT</span></header>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>alerte</th><th>source</th><th>type</th><th>severite</th><th>statut</th></tr>
+                  </thead>
+                  <tbody id="alerts-table"></tbody>
+                </table>
+              </div>
+            </section>
+            <aside class="tile detail-panel" id="alert-detail"></aside>
           </div>
-          <label class="search-box">
-            <span>Rechercher</span>
-            <input id="search" type="search" placeholder="Alert ID, hash, chemin">
-          </label>
         </section>
 
-        <section class="content-grid">
-          <div class="table-panel">
-            <table>
-              <thead>
-                <tr>
-                  <th>Alerte</th>
-                  <th>Artefact</th>
-                  <th>Risque</th>
-                  <th>Statut</th>
-                  <th>SHA256</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="records"></tbody>
-            </table>
+        <section class="view" id="quarantine-view" data-title="Quarantaine d'artefacts">
+          <div class="work-grid">
+            <section class="tile">
+              <header class="tile-header">
+                <h2>Quarantaine d'artefacts</h2>
+                <div class="segmented">
+                  <button class="segment active" type="button" data-filter="ALL">ALL</button>
+                  <button class="segment" type="button" data-filter="READY_FOR_ANALYSIS">READY</button>
+                  <button class="segment" type="button" data-filter="REJECTED">REJECTED</button>
+                </div>
+              </header>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>alerte</th><th>artefact</th><th>profil</th><th>hash</th><th>statut</th></tr>
+                  </thead>
+                  <tbody id="quarantine-table"></tbody>
+                </table>
+              </div>
+            </section>
+            <aside class="tile detail-panel" id="quarantine-detail"></aside>
           </div>
+        </section>
 
-          <aside class="detail-panel" id="details" aria-live="polite">
-            <div class="empty-state">
-              <strong>Selectionner une alerte</strong>
-              <span>Les details forensic seront affiches ici.</span>
+        <section class="view" id="sandbox-view" data-title="Analyses sandbox">
+          <section class="tile">
+            <header class="tile-header"><h2>Analyses sandbox</h2><span class="chip">VM</span></header>
+            <div class="sandbox-grid" id="sandbox-grid"></div>
+          </section>
+        </section>
+
+        <section class="view" id="iocs-view" data-title="Base IOC">
+          <div class="dual-grid">
+            <section class="tile">
+              <header class="tile-header"><h2>IOC & YARA</h2><span class="chip">INTEL</span></header>
+              <div id="ioc-list" class="ioc-list"></div>
+            </section>
+            <section class="tile">
+              <header class="tile-header"><h2>Scoring risque</h2><span class="chip">SCORE</span></header>
+              <div id="score-board" class="score-board"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="reports-view" data-title="Rapports & conformite">
+          <section class="tile">
+            <header class="tile-header"><h2>Rapports & conformite</h2><span class="chip">EXPORT</span></header>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>rapport</th><th>artefact</th><th>date</th><th>html</th><th>pdf</th></tr>
+                </thead>
+                <tbody id="reports-table"></tbody>
+              </table>
             </div>
-          </aside>
+          </section>
+        </section>
+
+        <section class="view" id="config-view" data-title="Configuration systeme">
+          <section class="tile config-tile">
+            <header class="tile-header"><h2>Configuration systeme</h2><span class="chip">READONLY</span></header>
+            <div class="config-grid">
+              <article><span>backend</span><strong>/api/quarantine/manifest</strong></article>
+              <article><span>sandbox</span><strong>VMware + SSH/SCP</strong></article>
+              <article><span>storage</span><strong>runtime/rootkit-defense</strong></article>
+              <article><span>policy</span><strong>integrity verified before handoff</strong></article>
+            </div>
+          </section>
         </section>
       </main>
     </div>
@@ -97,4 +280,3 @@
     <script src="./app.js"></script>
   </body>
 </html>
-

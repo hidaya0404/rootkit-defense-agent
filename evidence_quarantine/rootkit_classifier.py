@@ -82,6 +82,27 @@ class RootkitArtifactClassifier:
             rationale.append("Artifact path resembles a common Linux command targeted by userland rootkits.")
             next_step = "Compare hash with trusted package manager baseline in a clean environment."
 
+        elif "proc_mismatch" in name or "process_mismatch" in name:
+            category = "process_hiding_suspect"
+            techniques.extend(["procfs_manipulation", "hidden_process"])
+            mitre.extend(["T1562 Impair Defenses"])
+            rationale.append("Artifact records a process visibility mismatch often associated with process hiding.")
+            next_step = "Correlate /proc snapshots, ps output, process ancestry, and kernel indicators."
+
+        elif "network_mismatch" in name or "hidden_socket" in name:
+            category = "hidden_network_connection_suspect"
+            techniques.extend(["network_connection_hiding", "proc_net_manipulation"])
+            mitre.extend(["T1095 Non-Application Layer Protocol"])
+            rationale.append("Artifact records a network table mismatch often associated with hidden sockets.")
+            next_step = "Correlate /proc/net, ss/netstat output, firewall state, and sandbox network logs."
+
+        elif "tamper" in name and ("/var/log/" in lowered or "auth.log" in name):
+            category = "log_tampering_suspect"
+            techniques.extend(["log_wiping", "anti_forensics"])
+            mitre.extend(["T1070 Indicator Removal"])
+            rationale.append("Artifact resembles a log tampering or anti-forensic marker.")
+            next_step = "Preserve surrounding logs, journal entries, and auditd state for timeline reconstruction."
+
         else:
             rationale.append("Artifact is suspicious by detection context, but no specific rootkit family pattern was inferred.")
 
