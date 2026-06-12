@@ -1,12 +1,15 @@
 from datetime import datetime
 import uuid
 
+from analysis.ai_remediation_advisor import build_ai_recommendation
+
 
 def build_remediation_plan(artifact):
     analysis = artifact.get("analysis", {})
     risk_level = analysis.get("risk_level", "UNKNOWN")
     iocs = analysis.get("iocs", {})
     yara_matches = analysis.get("yara_matches", [])
+    ai_recommendation = build_ai_recommendation(artifact)
 
     actions = []
 
@@ -78,6 +81,17 @@ def build_remediation_plan(artifact):
         "status": "RECOMMENDED"
     })
 
+    step = len(actions) + 1
+    for action in ai_recommendation.get("recommended_actions", [])[:8]:
+        actions.append({
+            "step": step,
+            "title": "AI remediation advisor",
+            "action": action,
+            "command": "Validation humaine obligatoire avant action destructive.",
+            "status": "AI_RECOMMENDED"
+        })
+        step += 1
+
     return {
         "remediation_id": str(uuid.uuid4()),
         "artifact_id": artifact.get("artifact_id"),
@@ -85,7 +99,8 @@ def build_remediation_plan(artifact):
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "risk_level": risk_level,
         "risk_score": analysis.get("risk_score"),
-        "decision": get_decision(risk_level),
+        "decision": ai_recommendation.get("decision") or get_decision(risk_level),
+        "ai_recommendation": ai_recommendation,
         "automatic_deletion": False,
         "requires_human_validation": True,
         "actions": actions
