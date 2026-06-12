@@ -8,7 +8,7 @@ from evidence_quarantine.audit_logger import AuditLogger
 from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.exceptions import PolicyViolation
 from evidence_quarantine.hash_service import HashService
-from evidence_quarantine.id_generator import generate_alert_id, sanitize_alert_id
+from evidence_quarantine.id_generator import artifact_id_for_alert, generate_alert_id, sanitize_alert_id
 from evidence_quarantine.integrity_verifier import IntegrityVerifier
 from evidence_quarantine.metadata_collector import MetadataCollector
 from evidence_quarantine.models import (
@@ -40,6 +40,7 @@ class QuarantineManager:
 
     def quarantine_artifact(self, request: QuarantineRequest) -> QuarantineResult:
         alert_id = sanitize_alert_id(request.alert_id or generate_alert_id())
+        artifact_id = artifact_id_for_alert(alert_id)
         detected_at = request.detected_at or utc_now()
         evidence_dir = self._unique_evidence_dir(alert_id)
         ensure_dir(evidence_dir)
@@ -70,6 +71,7 @@ class QuarantineManager:
         except PolicyViolation as exc:
             return self._reject(
                 alert_id=alert_id,
+                artifact_id=artifact_id,
                 evidence_dir=evidence_dir,
                 audit=audit,
                 package_audit_path=package_audit_path,
@@ -143,6 +145,7 @@ class QuarantineManager:
             atomic_write_json(hashes_path, hashes)
             manifest = EvidenceManifest(
                 evidence_package_id=f"EV-{alert_id}",
+                artifact_id=artifact_id,
                 alert_id=alert_id,
                 package_version=self.config.version,
                 files=["artifact.bin", "metadata.json", "hashes.json", "audit.log", "manifest.json"],
@@ -155,15 +158,22 @@ class QuarantineManager:
 
             self.repository.upsert(
                 {
+                    "artifact_id": artifact_id,
                     "alert_id": alert_id,
+                    "filename": metadata.artifact_name,
+                    "original_filename": metadata.artifact_name,
                     "artifact_name": metadata.artifact_name,
                     "original_path": metadata.original_path,
                     "evidence_dir": str(evidence_dir),
                     "artifact_path": str(artifact_path),
+                    "quarantine_path": str(artifact_path),
+                    "stored_path": str(artifact_path),
                     "metadata_path": str(metadata_path),
                     "hashes_path": str(hashes_path),
                     "manifest_path": str(manifest_path),
                     "audit_log_path": str(package_audit_path),
+                    "md5": before_hash.md5,
+                    "sha1": before_hash.sha1,
                     "sha256": before_hash.sha256,
                     "rootkit_category": metadata.rootkit_profile.category if metadata.rootkit_profile else None,
                     "suspected_techniques": metadata.rootkit_profile.suspected_techniques
@@ -180,6 +190,7 @@ class QuarantineManager:
 
             return QuarantineResult(
                 success=success,
+                artifact_id=artifact_id,
                 alert_id=alert_id,
                 status=final_status,
                 evidence_dir=evidence_dir,
@@ -197,14 +208,21 @@ class QuarantineManager:
             self.repository.upsert(
                 {
                     "alert_id": alert_id,
+                    "artifact_id": artifact_id,
                     "artifact_name": Path(request.artifact_path).name,
+                    "filename": Path(request.artifact_path).name,
+                    "original_filename": Path(request.artifact_path).name,
                     "original_path": str(request.artifact_path),
                     "evidence_dir": str(evidence_dir),
                     "artifact_path": None,
+                    "quarantine_path": None,
+                    "stored_path": None,
                     "metadata_path": None,
                     "hashes_path": None,
                     "manifest_path": str(evidence_dir / "manifest.json"),
                     "audit_log_path": str(package_audit_path),
+                    "md5": None,
+                    "sha1": None,
                     "sha256": None,
                     "risk_level": request.risk_level.value,
                     "status": QuarantineStatus.FAILED.value,
@@ -216,6 +234,7 @@ class QuarantineManager:
             )
             return QuarantineResult(
                 success=False,
+                artifact_id=artifact_id,
                 alert_id=alert_id,
                 status=QuarantineStatus.FAILED,
                 evidence_dir=evidence_dir,
@@ -267,6 +286,7 @@ class QuarantineManager:
         self,
         *,
         alert_id: str,
+        artifact_id: str,
         evidence_dir: Path,
         audit: AuditLogger,
         package_audit_path: Path,
@@ -289,6 +309,7 @@ class QuarantineManager:
             evidence_dir / "request.json",
             {
                 "alert_id": alert_id,
+                "artifact_id": artifact_id,
                 "artifact_path": str(request.artifact_path),
                 "detection_reason": request.detection_reason,
                 "risk_level": request.risk_level.value,
@@ -299,6 +320,7 @@ class QuarantineManager:
         )
         manifest = EvidenceManifest(
             evidence_package_id=f"EV-{alert_id}",
+            artifact_id=artifact_id,
             alert_id=alert_id,
             package_version=self.config.version,
             files=["request.json", "audit.log", "manifest.json"],
@@ -310,14 +332,21 @@ class QuarantineManager:
         self.repository.upsert(
             {
                 "alert_id": alert_id,
+                "artifact_id": artifact_id,
                 "artifact_name": Path(request.artifact_path).name,
+                "filename": Path(request.artifact_path).name,
+                "original_filename": Path(request.artifact_path).name,
                 "original_path": str(request.artifact_path),
                 "evidence_dir": str(evidence_dir),
                 "artifact_path": None,
+                "quarantine_path": None,
+                "stored_path": None,
                 "metadata_path": None,
                 "hashes_path": None,
                 "manifest_path": str(manifest_path),
                 "audit_log_path": str(package_audit_path),
+                "md5": None,
+                "sha1": None,
                 "sha256": None,
                 "risk_level": request.risk_level.value,
                 "status": QuarantineStatus.REJECTED.value,
@@ -329,6 +358,7 @@ class QuarantineManager:
         )
         return QuarantineResult(
             success=False,
+            artifact_id=artifact_id,
             alert_id=alert_id,
             status=QuarantineStatus.REJECTED,
             evidence_dir=evidence_dir,
@@ -362,6 +392,7 @@ class QuarantineManager:
         )
         manifest = EvidenceManifest(
             evidence_package_id=f"EV-{alert_id}",
+            artifact_id=artifact_id_for_alert(alert_id),
             alert_id=alert_id,
             package_version=self.config.version,
             files=["failure.json", "audit.log", "manifest.json"],

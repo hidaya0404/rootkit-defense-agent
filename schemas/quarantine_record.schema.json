@@ -3,8 +3,9 @@
   "title": "QuarantineRecord",
   "type": "object",
   "required": [
+    "artifact_id",
     "alert_id",
-    "artifact_name",
+    "filename",
     "original_path",
     "evidence_dir",
     "status",
@@ -13,6 +14,15 @@
   ],
   "properties": {
     "alert_id": {
+      "type": "string"
+    },
+    "artifact_id": {
+      "type": "string"
+    },
+    "filename": {
+      "type": "string"
+    },
+    "original_filename": {
       "type": "string"
     },
     "artifact_name": {
@@ -25,6 +35,27 @@
       "type": "string"
     },
     "artifact_path": {
+      "type": ["string", "null"]
+    },
+    "quarantine_path": {
+      "type": ["string", "null"]
+    },
+    "stored_path": {
+      "type": ["string", "null"]
+    },
+    "metadata_path": {
+      "type": ["string", "null"]
+    },
+    "hashes_path": {
+      "type": ["string", "null"]
+    },
+    "manifest_path": {
+      "type": ["string", "null"]
+    },
+    "md5": {
+      "type": ["string", "null"]
+    },
+    "sha1": {
       "type": ["string", "null"]
     },
     "sha256": {

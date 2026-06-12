@@ -100,6 +100,7 @@ class CustodyEvent:
 @dataclass
 class EvidenceManifest:
     evidence_package_id: str
+    artifact_id: str
     alert_id: str
     package_version: str
     files: list[str]
@@ -111,6 +112,7 @@ class EvidenceManifest:
 @dataclass
 class QuarantineResult:
     success: bool
+    artifact_id: str
     alert_id: str
     status: QuarantineStatus
     evidence_dir: Path
@@ -124,6 +126,7 @@ class QuarantineResult:
     def to_summary(self) -> dict[str, Any]:
         return {
             "success": self.success,
+            "artifact_id": self.artifact_id,
             "alert_id": self.alert_id,
             "status": self.status,
             "evidence_dir": self.evidence_dir,
