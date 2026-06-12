@@ -9,28 +9,52 @@ CONFIG_DIR="${ROOTRAP_CONFIG_DIR:-/etc/rootrap}"
 UI_HOST="${ROOTRAP_HOST:-0.0.0.0}"
 UI_PORT="${ROOTRAP_PORT:-8081}"
 M4_URL="${ROOTKIT_DEFENSE_M4_URL:-https://exp-queens-patterns-customs.trycloudflare.com}"
+REMOTE_DATA="${ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA:-0}"
+INSTALL_LOG="${ROOTRAP_INSTALL_LOG:-/var/log/rootrap-install.log}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 log() {
-  echo -e "${BLUE}[${APP_NAME}]${NC} $*"
+  echo -e "${CYAN}[i]${NC} $*"
 }
 
 ok() {
-  echo -e "${GREEN}[OK]${NC} $*"
+  echo -e "${GREEN}[✔]${NC} $*"
 }
 
 warn() {
-  echo -e "${YELLOW}[WARN]${NC} $*"
+  echo -e "${YELLOW}[!]${NC} $*"
 }
 
 fail() {
-  echo -e "${RED}[ERROR]${NC} $*" >&2
+  echo -e "${RED}[✘]${NC} $*" >&2
   exit 1
+}
+
+section() {
+  echo ""
+  echo -e "${BOLD}${CYAN}▶ $*${NC}"
+  echo ""
+}
+
+print_banner() {
+  echo -e "${RED}"
+  cat <<'EOF'
+ ██████╗  ██████╗  ██████╗ ████████╗██████╗  █████╗ ██████╗
+ ██╔══██╗██╔═══██╗██╔═══██╗╚══██╔══╝██╔══██╗██╔══██╗██╔══██╗
+ ██████╔╝██║   ██║██║   ██║   ██║   ██████╔╝███████║██████╔╝
+ ██╔══██╗██║   ██║██║   ██║   ██║   ██╔══██╗██╔══██║██╔═══╝
+ ██║  ██║╚██████╔╝╚██████╔╝   ██║   ██║  ██║██║  ██║██║
+ ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝
+        Linux Rootkit Defense Platform — Installer v1.0
+EOF
+  echo -e "${NC}"
 }
 
 local_ip() {
@@ -68,6 +92,8 @@ ROOTRAP_AGENT_LOG_FILE=$LOG_DIR/agent.log
 ROOTRAP_PENDING_ALERTS_FILE=$LOG_DIR/pending_alerts.jsonl
 ROOTRAP_AGENT_QUARANTINE_DIR=$STATE_DIR/agent-quarantine
 ROOTRAP_BASELINE_DIR=$INSTALL_DIR/shared
+ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA=$REMOTE_DATA
+ROOTKIT_DEFENSE_STORAGE=$STATE_DIR
 ROOTKIT_DEFENSE_M4_URL=$M4_URL
 PYTHONPATH=$INSTALL_DIR
 PYTHONUNBUFFERED=1
@@ -76,6 +102,13 @@ EOF
 }
 
 install_packages() {
+  section "Checking system prerequisites"
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    log "Detected OS: ${PRETTY_NAME:-Linux}"
+  fi
+
   log "Installing operating-system dependencies..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
@@ -96,6 +129,7 @@ install_packages() {
 }
 
 copy_project() {
+  section "Installing project files"
   local src
   src="$(repo_dir)"
 
@@ -114,11 +148,49 @@ copy_project() {
     --exclude ".pytest_cache" \
     --exclude "runtime" \
     --exclude "handoff" \
+    --exclude "logs" \
+    --exclude "backend/data" \
+    --exclude "artifacts" \
+    --exclude "data" \
+    --exclude "download" \
+    --exclude "uploads" \
+    --exclude "reports/generated" \
+    --exclude "quarantine_zone" \
+    --exclude "sandbox/results" \
+    --delete-excluded \
     "$src"/ "$INSTALL_DIR"/
   ok "Project copied"
 }
 
+prepare_runtime_dirs() {
+  section "Preparing machine-specific runtime"
+  rm -rf \
+    "$INSTALL_DIR/logs" \
+    "$INSTALL_DIR/backend/data" \
+    "$INSTALL_DIR/artifacts" \
+    "$INSTALL_DIR/data" \
+    "$INSTALL_DIR/download" \
+    "$INSTALL_DIR/uploads" \
+    "$INSTALL_DIR/reports/generated" \
+    "$INSTALL_DIR/quarantine_zone" \
+    "$INSTALL_DIR/sandbox/results"
+
+  mkdir -p \
+    "$STATE_DIR/quarantine" \
+    "$STATE_DIR/audit" \
+    "$STATE_DIR/reports" \
+    "$STATE_DIR/sandbox/results" \
+    "$STATE_DIR/agent-quarantine" \
+    "$LOG_DIR"
+
+  touch "$LOG_DIR/agent.log" "$LOG_DIR/pending_alerts.jsonl"
+  chmod 0750 "$STATE_DIR" "$LOG_DIR"
+  chmod 0640 "$LOG_DIR/agent.log" "$LOG_DIR/pending_alerts.jsonl"
+  ok "Runtime isolated in $STATE_DIR and $LOG_DIR"
+}
+
 install_python_env() {
+  section "Installing Python environment"
   log "Creating Python virtual environment..."
   python3 -m venv "$INSTALL_DIR/.venv"
   "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
@@ -127,6 +199,7 @@ install_python_env() {
 }
 
 generate_baselines() {
+  section "Generating local Linux baselines"
   log "Generating local Linux baselines..."
   ROOTRAP_INSTALL_DIR="$INSTALL_DIR" "$INSTALL_DIR/.venv/bin/python" - <<'PY'
 from pathlib import Path
@@ -166,6 +239,7 @@ PY
 }
 
 install_systemd_units() {
+  section "Installing services"
   log "Installing systemd services..."
 
   systemctl stop roottrap-agent.service roottrap-backend.service 2>/dev/null || true
@@ -215,29 +289,51 @@ EOF
   systemctl enable rootrap-ui.service rootrap-agent.service >/dev/null
   systemctl restart rootrap-ui.service
   systemctl restart rootrap-agent.service
+  wait_for_dashboard
   ok "Services installed and started"
 }
 
 install_command() {
+  section "Installing system command"
   log "Installing rootrap command..."
   install -m 0755 "$INSTALL_DIR/rootrap.sh" /usr/local/bin/rootrap
   ln -sf /usr/local/bin/rootrap /usr/local/bin/roottrap
   ok "Command installed: rootrap"
 }
 
+wait_for_dashboard() {
+  local url="http://127.0.0.1:${UI_PORT}/api/health"
+  log "Waiting for dashboard API: $url"
+  for _ in $(seq 1 30); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      ok "Dashboard API is reachable"
+      return 0
+    fi
+    sleep 1
+  done
+
+  warn "Dashboard API did not answer within 30 seconds."
+  warn "Recent UI logs:"
+  journalctl -u rootrap-ui.service -n 30 --no-pager || true
+  fail "RootRAP UI service started but /api/health is not reachable."
+}
+
 print_summary() {
   local ip
   ip="$(local_ip)"
   echo ""
-  echo -e "${GREEN}========================================${NC}"
-  echo -e "${GREEN} ${APP_NAME} installation completed${NC}"
-  echo -e "${GREEN}========================================${NC}"
-  echo ""
-  echo "Dashboard:"
-  echo -e "  Local:   ${BLUE}http://127.0.0.1:${UI_PORT}/${NC}"
+  echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════${NC}"
+  echo -e "${BOLD}  ${APP_NAME} — INSTALLED AND RUNNING${NC}"
+  echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════${NC}"
+  echo -e "  ${CYAN}Local URL      :${NC} http://127.0.0.1:${UI_PORT}/"
   if [ -n "$ip" ]; then
-    echo -e "  Network: ${BLUE}http://${ip}:${UI_PORT}/${NC}"
+    echo -e "  ${CYAN}Network URL    :${NC} http://${ip}:${UI_PORT}/"
   fi
+  echo -e "  ${CYAN}Install dir    :${NC} $INSTALL_DIR"
+  echo -e "  ${CYAN}Runtime data   :${NC} $STATE_DIR"
+  echo -e "  ${CYAN}Logs           :${NC} $LOG_DIR"
+  echo -e "  ${CYAN}M4 backend     :${NC} $M4_URL"
+  echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════${NC}"
   echo ""
   echo "Useful commands:"
   echo "  rootrap status"
@@ -250,10 +346,13 @@ print_summary() {
 }
 
 main() {
+  print_banner
   require_root
   require_ubuntu_like
+  : > "$INSTALL_LOG"
   install_packages
   copy_project
+  prepare_runtime_dirs
   write_env_file
   install_python_env
   generate_baselines

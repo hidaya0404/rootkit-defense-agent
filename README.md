@@ -15,6 +15,20 @@ sudo ./install.sh
 
 Le script installe l'outil dans `/opt/rootrap`, cree un environnement Python isole, installe la commande systeme `rootrap`, demarre l'agent Linux et expose le dashboard web.
 
+Les donnees affichees par defaut sont propres a la machine installee:
+
+```text
+/var/lib/rootrap      donnees runtime, quarantaine, rapports locaux
+/var/log/rootrap      logs agent et alertes locales
+/etc/rootrap          configuration systeme
+```
+
+Le dashboard ne copie pas les anciens resultats du repository. Il garde les checks M4 reels, mais n'importe pas automatiquement les anciens rapports distants dans l'affichage local. Pour une demo d'integration qui doit afficher aussi les donnees distantes M4:
+
+```bash
+sudo ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA=1 ./install.sh
+```
+
 Par defaut, l'interface est disponible sur:
 
 ```text
@@ -30,6 +44,7 @@ rootrap url
 rootrap restart
 rootrap logs ui
 rootrap logs agent
+rootrap diagnose
 rootrap quarantine list
 rootrap quarantine demo
 rootrap simulate-rootkit --scenario full --quarantine

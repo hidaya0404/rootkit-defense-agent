@@ -6,11 +6,11 @@ from pathlib import Path
 
 
 def default_storage_root() -> Path:
-    configured = os.getenv("ROOTKIT_DEFENSE_STORAGE")
+    configured = os.getenv("ROOTRAP_STORAGE_ROOT") or os.getenv("ROOTKIT_DEFENSE_STORAGE")
     if configured:
         return Path(configured).expanduser()
     if os.name == "posix":
-        return Path("/var/lib/rootkit-defense")
+        return Path("/var/lib/rootrap")
     return Path.cwd() / "runtime" / "rootkit-defense"
 
 

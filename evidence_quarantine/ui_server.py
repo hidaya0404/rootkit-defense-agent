@@ -18,6 +18,21 @@ from evidence_quarantine.storage import read_json
 DEFAULT_M4_BACKEND_URL = "https://exp-queens-patterns-customs.trycloudflare.com"
 
 
+def rootrap_storage_root() -> Path | None:
+    configured = os.getenv("ROOTRAP_STORAGE_ROOT") or os.getenv("ROOTKIT_DEFENSE_STORAGE")
+    return Path(configured).expanduser() if configured else None
+
+
+def rootrap_log_dir() -> Path | None:
+    configured = os.getenv("ROOTRAP_LOG_DIR")
+    return Path(configured).expanduser() if configured else None
+
+
+def remote_dashboard_data_enabled() -> bool:
+    value = os.getenv("ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA", "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def default_web_dir() -> Path:
     repo_web = Path(__file__).resolve().parents[1] / "web"
     if repo_web.exists():
@@ -65,6 +80,14 @@ def read_json_lines(path: Path) -> list[dict[str, object]]:
 
 
 def load_alerts() -> list[dict[str, object]]:
+    configured_alerts = os.getenv("ROOTRAP_PENDING_ALERTS_FILE")
+    if configured_alerts:
+        return read_json_lines(Path(configured_alerts).expanduser())
+
+    log_dir = rootrap_log_dir()
+    if log_dir:
+        return read_json_lines(log_dir / "pending_alerts.jsonl")
+
     root = repo_root()
     candidates = [
         root / "logs" / "pending_alerts.jsonl",
@@ -79,11 +102,43 @@ def load_alerts() -> list[dict[str, object]]:
 
 def load_sandbox_results() -> list[dict[str, object]]:
     root = repo_root()
-    remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/sandbox/results", timeout=4.0)
-    if isinstance(remote_payload, dict):
-        remote_results = remote_payload.get("results")
-        if isinstance(remote_results, list):
-            return [item for item in remote_results if isinstance(item, dict)]
+
+    storage_root = rootrap_storage_root()
+    if storage_root:
+        local_candidates = [
+            storage_root / "sandbox_results.json",
+            storage_root / "sandbox" / "results.json",
+            storage_root / "sandbox" / "sandbox_results.json",
+        ]
+        for candidate in local_candidates:
+            local_results = read_json(candidate, default=[])
+            if isinstance(local_results, list):
+                items = [item for item in local_results if isinstance(item, dict)]
+                if items or not remote_dashboard_data_enabled():
+                    return items
+            if isinstance(local_results, dict):
+                results = local_results.get("results")
+                if isinstance(results, list):
+                    items = [item for item in results if isinstance(item, dict)]
+                    if items or not remote_dashboard_data_enabled():
+                        return items
+
+        collected: list[dict[str, object]] = []
+        sandbox_dir = storage_root / "sandbox" / "results"
+        if sandbox_dir.exists():
+            for result_file in sorted(sandbox_dir.glob("*/sandbox_result.json")):
+                item = read_json(result_file, default={})
+                if isinstance(item, dict):
+                    collected.append(item)
+        if collected or not remote_dashboard_data_enabled():
+            return collected
+
+    if remote_dashboard_data_enabled():
+        remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/sandbox/results", timeout=4.0)
+        if isinstance(remote_payload, dict):
+            remote_results = remote_payload.get("results")
+            if isinstance(remote_results, list):
+                return [item for item in remote_results if isinstance(item, dict)]
 
     results_file = root / "backend" / "data" / "sandbox_results.json"
     results = read_json(results_file, default=[])
@@ -102,13 +157,45 @@ def load_sandbox_results() -> list[dict[str, object]]:
 
 def load_reports() -> list[dict[str, object]]:
     root = repo_root()
-    remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/reports", timeout=4.0)
-    if isinstance(remote_payload, dict):
-        remote_reports = remote_payload.get("reports")
-        if isinstance(remote_reports, list):
-            return [item for item in remote_reports if isinstance(item, dict)]
-    if isinstance(remote_payload, list):
-        return [item for item in remote_payload if isinstance(item, dict)]
+
+    storage_root = rootrap_storage_root()
+    if storage_root:
+        local_candidates = [
+            storage_root / "reports.json",
+            storage_root / "reports" / "reports.json",
+        ]
+        for candidate in local_candidates:
+            local_reports = read_json(candidate, default=[])
+            if isinstance(local_reports, list):
+                items = [item for item in local_reports if isinstance(item, dict)]
+                if items or not remote_dashboard_data_enabled():
+                    return items
+            if isinstance(local_reports, dict):
+                reports = local_reports.get("reports")
+                if isinstance(reports, list):
+                    items = [item for item in reports if isinstance(item, dict)]
+                    if items or not remote_dashboard_data_enabled():
+                        return items
+
+        reports_dir = storage_root / "reports"
+        if reports_dir.exists():
+            items = [
+                {"report_path": str(path), "filename": path.name}
+                for path in sorted(reports_dir.glob("*.html"))
+            ]
+            if items or not remote_dashboard_data_enabled():
+                return items
+        if not remote_dashboard_data_enabled():
+            return []
+
+    if remote_dashboard_data_enabled():
+        remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/reports", timeout=4.0)
+        if isinstance(remote_payload, dict):
+            remote_reports = remote_payload.get("reports")
+            if isinstance(remote_reports, list):
+                return [item for item in remote_reports if isinstance(item, dict)]
+        if isinstance(remote_payload, list):
+            return [item for item in remote_payload if isinstance(item, dict)]
 
     reports_file = root / "backend" / "data" / "reports.json"
     reports = read_json(reports_file, default=[])
@@ -125,17 +212,18 @@ def _artifact_candidates(config: QuarantineConfig) -> list[str]:
             if artifact_id and str(artifact_id) not in candidates:
                 candidates.append(str(artifact_id))
 
-    ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
-    ready_items: list[object] = []
-    if isinstance(ready_payload, dict):
-        value = ready_payload.get("artifacts") or ready_payload.get("results") or ready_payload.get("quarantine")
-        ready_items = value if isinstance(value, list) else []
-    elif isinstance(ready_payload, list):
-        ready_items = ready_payload
-    for item in ready_items:
-        artifact_id = item.get("artifact_id") if isinstance(item, dict) else None
-        if artifact_id and str(artifact_id) not in candidates:
-            candidates.append(str(artifact_id))
+    if remote_dashboard_data_enabled():
+        ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
+        ready_items: list[object] = []
+        if isinstance(ready_payload, dict):
+            value = ready_payload.get("artifacts") or ready_payload.get("results") or ready_payload.get("quarantine")
+            ready_items = value if isinstance(value, list) else []
+        elif isinstance(ready_payload, list):
+            ready_items = ready_payload
+        for item in ready_items:
+            artifact_id = item.get("artifact_id") if isinstance(item, dict) else None
+            if artifact_id and str(artifact_id) not in candidates:
+                candidates.append(str(artifact_id))
 
     return candidates[:6]
 
@@ -144,13 +232,14 @@ def load_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
     backend_url = configured_m4_backend_url()
     remediations: list[dict[str, object]] = []
 
-    remote_payload, _ = load_remote_json(f"{backend_url}/api/remediation", timeout=3.0)
-    if isinstance(remote_payload, dict):
-        remote_results = remote_payload.get("results") or remote_payload.get("remediations")
-        if isinstance(remote_results, list):
-            return [item for item in remote_results if isinstance(item, dict)]
-    if isinstance(remote_payload, list):
-        return [item for item in remote_payload if isinstance(item, dict)]
+    if remote_dashboard_data_enabled():
+        remote_payload, _ = load_remote_json(f"{backend_url}/api/remediation", timeout=3.0)
+        if isinstance(remote_payload, dict):
+            remote_results = remote_payload.get("results") or remote_payload.get("remediations")
+            if isinstance(remote_results, list):
+                return [item for item in remote_results if isinstance(item, dict)]
+        if isinstance(remote_payload, list):
+            return [item for item in remote_payload if isinstance(item, dict)]
 
     for artifact_id in _artifact_candidates(config):
         payload, error = load_remote_json(f"{backend_url}/api/remediation/{artifact_id}", timeout=2.0)
@@ -205,12 +294,12 @@ def build_boot_checks(config: QuarantineConfig) -> dict[str, object]:
         root / "agent" / "monitor_files.py",
         root / "agent" / "monitor_network.py",
     ]
-    service_state = systemd_service_status("rootkit-agent.service")
+    service_state = systemd_service_status("rootrap-agent.service") or systemd_service_status("rootkit-agent.service")
     missing_agent_files = [str(path.relative_to(root)) for path in agent_files if not path.exists()]
     alerts_count = len(load_alerts())
     if service_state == "active":
         m1_status = "OK"
-        m1_line = f"rootkit-agent.service active; {alerts_count} local alert(s) visible"
+        m1_line = f"rootrap-agent.service active; {alerts_count} local alert(s) visible"
     elif not missing_agent_files:
         m1_status = "WARN"
         m1_line = "agent modules installed; systemd service not active in this runtime"
