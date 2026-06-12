@@ -15,7 +15,7 @@ from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.quarantine_manager import QuarantineManager
 from evidence_quarantine.storage import read_json
 
-DEFAULT_M4_BACKEND_URL = "https://employers-competitors-printed-situated.trycloudflare.com"
+DEFAULT_M4_BACKEND_URL = "https://exp-queens-patterns-customs.trycloudflare.com"
 
 
 def default_web_dir() -> Path:
