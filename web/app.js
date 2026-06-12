@@ -1,82 +1,3 @@
-const fallback = {
-  alerts: [
-    {
-      alert_id: "ALT-2026-000001",
-      timestamp: "2026-06-11T14:42:10Z",
-      source_module: "file_monitor",
-      severity: "HIGH",
-      type: "EXECUTABLE_IN_SUSPICIOUS_DIR",
-      description: "Executable found in suspicious directory",
-      details: { path: "/tmp/rk_demo.ko", sha256: "9b3a1d9a6f2d5a2f8a66b3f4c3e0154f27a5e779b1db2f7a8bdf6bd463ea2b88" },
-      status: "NEW"
-    },
-    {
-      alert_id: "ALT-2026-000002",
-      timestamp: "2026-06-11T14:49:02Z",
-      source_module: "kernel_monitor",
-      severity: "CRITICAL",
-      type: "UNKNOWN_KERNEL_MODULE",
-      description: "Unknown kernel module detected",
-      details: { module_name: "rk_shadow" },
-      status: "NEW"
-    }
-  ],
-  quarantine: [
-    {
-      artifact_id: "ART-ALT-2026-000001",
-      alert_id: "ALT-2026-000001",
-      filename: "rk_demo.ko",
-      artifact_name: "rk_demo.ko",
-      original_path: "/tmp/rk_demo.ko",
-      evidence_dir: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001",
-      artifact_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
-      quarantine_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/artifact.bin",
-      sha256: "9b3a1d9a6f2d5a2f8a66b3f4c3e0154f27a5e779b1db2f7a8bdf6bd463ea2b88",
-      md5: "3ee4ff6ea4e9deaff20501858322538d",
-      sha1: "405ca6a5db545c0e9338ce8b7c29c431dfd4e835",
-      rootkit_category: "KERNEL MODULE",
-      suspected_techniques: ["kernel_module_loading", "stealth_persistence"],
-      risk_level: "HIGH",
-      status: "READY_FOR_ANALYSIS",
-      integrity_verified: true,
-      ready_for_sandbox: true,
-      created_at: "2026-06-11T14:44:12Z",
-      audit_log_path: "/var/lib/rootkit-defense/quarantine/ALT-2026-000001/audit.log"
-    }
-  ],
-  sandbox: [
-    {
-      analysis_id: "analysis_20260611_144615",
-      artifact_id: "ART-ALT-2026-000001",
-      alert_id: "ALT-2026-000001",
-      sandbox_status: "COMPLETED",
-      execution_status: "COMPLETED",
-      exit_code: 0,
-      vm_name: "RootkitSandbox",
-      snapshot_name: "clean-state-ssh-v2",
-      analysis_started_at: "2026-06-11T14:46:15Z",
-      analysis_finished_at: "2026-06-11T14:46:28Z",
-      observed_processes: ["bash /tmp/rk_demo.ko"],
-      file_events: { created: ["/tmp/sandbox_created_file.txt"], modified: ["/tmp/sandbox_test_dir/modified.txt"] },
-      network_events: ["tcp 192.168.148.135:22 -> 192.168.148.1:49675"],
-      behavior_summary: "Execution success=True; exit_code=0; files_created=2; network_connections=1",
-      logs_path: "sandbox/results/analysis_20260611_144615"
-    }
-  ],
-  reports: [
-    {
-      report_id: "RPT-ALT-2026-000001",
-      artifact_id: "ART-ALT-2026-000001",
-      alert_id: "ALT-2026-000001",
-      report_path: "reports/generated/ART-ALT-2026-000001.html",
-      pdf_report_path: "reports/generated/ART-ALT-2026-000001.pdf",
-      timestamp: "2026-06-11T14:47:02Z",
-      risk_score: 82,
-      risk_level: "HIGH"
-    }
-  ]
-};
-
 const state = {
   alerts: [],
   quarantine: [],
@@ -84,8 +5,12 @@ const state = {
   reports: [],
   activeView: "dashboard",
   quarantineFilter: "ALL",
-  query: ""
+  query: "",
+  connectionErrors: {},
+  refreshInFlight: false
 };
+
+const AUTO_REFRESH_MS = 5000;
 
 const fallbackBootChecks = [
   {
@@ -127,14 +52,16 @@ function normalizeList(payload, key) {
   return [];
 }
 
-async function fetchJson(url, fallbackValue, key) {
+async function fetchJson(url, key) {
   try {
     const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) throw new Error(String(response.status));
     const list = normalizeList(await response.json(), key);
-    return list.length ? list : fallbackValue;
-  } catch {
-    return fallbackValue;
+    state.connectionErrors[url] = null;
+    return list;
+  } catch (error) {
+    state.connectionErrors[url] = error?.message || "fetch failed";
+    return [];
   }
 }
 
@@ -274,11 +201,21 @@ function renderRecentQuarantine() {
 }
 
 function renderTrend() {
-  const count = Math.max(1, state.alerts.length + state.quarantine.length + state.sandbox.length);
-  const bars = Array.from({ length: 24 }, (_, index) => {
-    const seed = ((index * 7 + count * 5) % 17) + (index % 6);
-    const height = Math.max(8, Math.min(100, seed * 5));
-    return `<div class="trend-bar" title="${index}:00" style="height:${height}%"></div>`;
+  const now = new Date();
+  const buckets = Array.from({ length: 24 }, () => 0);
+  for (const item of allIncidents()) {
+    const timestamp = Date.parse(item.timestamp || "");
+    if (Number.isNaN(timestamp)) continue;
+    const ageHours = Math.floor((now.getTime() - timestamp) / 3600000);
+    if (ageHours >= 0 && ageHours < 24) {
+      buckets[23 - ageHours] += 1;
+    }
+  }
+  const max = Math.max(1, ...buckets);
+  const bars = buckets.map((count, index) => {
+    const hour = new Date(now.getTime() - (23 - index) * 3600000).getHours();
+    const height = count ? Math.max(10, Math.round((count / max) * 100)) : 4;
+    return `<div class="trend-bar" title="${hour}:00 - ${count} event(s)" style="height:${height}%"></div>`;
   });
   $("#trend-chart").innerHTML = bars.join("");
 }
@@ -302,7 +239,9 @@ function renderOverview() {
   renderRecentQuarantine();
   renderTrend();
   renderActivityLog();
-  $("#last-update").textContent = `LAST UPDATE: ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+  const errors = Object.values(state.connectionErrors).filter(Boolean).length;
+  const suffix = errors ? ` / API WARN: ${errors}` : " / LIVE";
+  $("#last-update").textContent = `LAST UPDATE: ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}${suffix}`;
 }
 
 function renderAlerts() {
@@ -514,17 +453,23 @@ function renderAll() {
 }
 
 async function loadData() {
-  const [alerts, quarantine, sandbox, reports] = await Promise.all([
-    fetchJson("/api/alerts", fallback.alerts, "alerts"),
-    fetchJson("/api/quarantine", fallback.quarantine, "quarantine"),
-    fetchJson("/api/sandbox/results", fallback.sandbox, "results"),
-    fetchJson("/api/reports", fallback.reports, "reports")
-  ]);
-  state.alerts = alerts;
-  state.quarantine = quarantine;
-  state.sandbox = sandbox;
-  state.reports = reports;
-  renderAll();
+  if (state.refreshInFlight) return;
+  state.refreshInFlight = true;
+  try {
+    const [alerts, quarantine, sandbox, reports] = await Promise.all([
+      fetchJson("/api/alerts", "alerts"),
+      fetchJson("/api/quarantine", "quarantine"),
+      fetchJson("/api/sandbox/results", "results"),
+      fetchJson("/api/reports", "reports")
+    ]);
+    state.alerts = alerts;
+    state.quarantine = quarantine;
+    state.sandbox = sandbox;
+    state.reports = reports;
+    renderAll();
+  } finally {
+    state.refreshInFlight = false;
+  }
 }
 
 function finishBoot() {
@@ -659,3 +604,4 @@ function bindEvents() {
 bindEvents();
 runBootSequence();
 loadData();
+window.setInterval(loadData, AUTO_REFRESH_MS);

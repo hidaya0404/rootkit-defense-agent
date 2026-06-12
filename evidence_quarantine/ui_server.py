@@ -79,6 +79,12 @@ def load_alerts() -> list[dict[str, object]]:
 
 def load_sandbox_results() -> list[dict[str, object]]:
     root = repo_root()
+    remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/sandbox/results", timeout=4.0)
+    if isinstance(remote_payload, dict):
+        remote_results = remote_payload.get("results")
+        if isinstance(remote_results, list):
+            return [item for item in remote_results if isinstance(item, dict)]
+
     results_file = root / "backend" / "data" / "sandbox_results.json"
     results = read_json(results_file, default=[])
     if isinstance(results, list) and results:
@@ -96,6 +102,14 @@ def load_sandbox_results() -> list[dict[str, object]]:
 
 def load_reports() -> list[dict[str, object]]:
     root = repo_root()
+    remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/reports", timeout=4.0)
+    if isinstance(remote_payload, dict):
+        remote_reports = remote_payload.get("reports")
+        if isinstance(remote_reports, list):
+            return [item for item in remote_reports if isinstance(item, dict)]
+    if isinstance(remote_payload, list):
+        return [item for item in remote_payload if isinstance(item, dict)]
+
     reports_file = root / "backend" / "data" / "reports.json"
     reports = read_json(reports_file, default=[])
     if isinstance(reports, list):
