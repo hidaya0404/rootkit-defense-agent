@@ -16,6 +16,7 @@ from evidence_quarantine.ui_server import (
     load_remediations,
     load_reports,
     load_sandbox_results,
+    load_ui_records,
 )
 
 
@@ -147,6 +148,65 @@ class UiServerTest(unittest.TestCase):
                 cases = build_cases(config)
 
             self.assertEqual(len(cases), 1)
+            sandbox_stage = next(stage for stage in cases[0]["timeline"] if stage["id"] == "m3")
+            self.assertEqual(sandbox_stage["status"], "DONE")
+
+    def test_cases_merge_sandbox_result_when_m4_uses_different_artifact_id_but_same_hash(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = QuarantineConfig(storage_root=root / "storage")
+            manager = QuarantineManager(config)
+            RootkitLabSimulator(root / "victim").quarantine_scenario("kernel-module", manager)
+            local_record = load_ui_records(config)[0]
+            local_sha256 = local_record["sha256"]
+
+            def fake_remote(url, **_kwargs):
+                if url.endswith("/api/sandbox/results"):
+                    return (
+                        {
+                            "results": [
+                                {
+                                    "artifact_id": "ART-M4-REGENERATED-ID",
+                                    "alert_id": "ALT-M4-REGENERATED-ID",
+                                    "execution_status": "COMPLETED",
+                                    "finished_at": "2026-06-13T13:31:00Z",
+                                }
+                            ]
+                        },
+                        None,
+                    )
+                if url.endswith("/api/quarantine/ready"):
+                    return (
+                        {
+                            "artifacts": [
+                                {
+                                    "artifact_id": "ART-M4-REGENERATED-ID",
+                                    "alert_id": "ALT-M4-REGENERATED-ID",
+                                    "filename": "rk_demo.ko",
+                                    "sha256": local_sha256,
+                                    "status": "READY_FOR_ANALYSIS",
+                                    "integrity_verified": True,
+                                    "ready_for_sandbox": True,
+                                }
+                            ]
+                        },
+                        None,
+                    )
+                return ({}, None)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "ROOTRAP_PENDING_ALERTS_FILE": str(root / "missing.jsonl"),
+                    "ROOTRAP_STORAGE_ROOT": str(config.storage_root),
+                    "ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA": "1",
+                },
+            ), patch("evidence_quarantine.ui_server.load_remote_json", side_effect=fake_remote):
+                results = load_sandbox_results()
+                cases = build_cases(config)
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["artifact_sha256"], local_sha256)
             sandbox_stage = next(stage for stage in cases[0]["timeline"] if stage["id"] == "m3")
             self.assertEqual(sandbox_stage["status"], "DONE")
 

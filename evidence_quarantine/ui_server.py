@@ -69,25 +69,94 @@ def list_from_payload(payload: dict[str, object] | list[object] | None, *keys: s
     return []
 
 
-def embedded_sandbox_results(scope: set[str]) -> list[dict[str, object]]:
+def hash_identity_values(item: dict[str, object]) -> set[str]:
+    values: set[str] = set()
+    for key in ("sha256", "artifact_sha256", "downloaded_sha256", "md5", "sha1"):
+        value = item.get(key)
+        if value:
+            normalized_key = "sha256" if key in {"artifact_sha256", "downloaded_sha256"} else key
+            values.add(f"{normalized_key}:{str(value).lower()}")
+
+    hashes = item.get("hashes")
+    if isinstance(hashes, dict):
+        for key in ("sha256", "md5", "sha1"):
+            value = hashes.get(key)
+            if value:
+                values.add(f"{key}:{str(value).lower()}")
+
+    details = item.get("details")
+    if isinstance(details, dict):
+        values.update(hash_identity_values(details))
+
+    analysis = item.get("analysis")
+    if isinstance(analysis, dict):
+        values.update(hash_identity_values(analysis))
+
+    sandbox_result = item.get("sandbox_result")
+    if isinstance(sandbox_result, dict):
+        values.update(hash_identity_values(sandbox_result))
+
+    return values
+
+
+def remote_quarantine_artifacts() -> list[dict[str, object]]:
+    artifacts: list[dict[str, object]] = []
+    if not remote_dashboard_data_enabled():
+        return artifacts
+
+    for endpoint in ("/api/quarantine", "/api/quarantine/ready"):
+        payload, _ = load_remote_json(f"{configured_m4_backend_url()}{endpoint}", timeout=4.0)
+        artifacts.extend(list_from_payload(payload, "artifacts", "quarantine", "results", "items", "data"))
+
+    return merge_records(artifacts, identity_keys=("artifact_id", "alert_id", "sha256"))
+
+
+def enrich_sandbox_results_with_artifacts(
+    sandbox_results: list[dict[str, object]],
+    artifacts: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    index: dict[str, dict[str, object]] = {}
+    for artifact in artifacts:
+        for key in identity_values(artifact):
+            index.setdefault(key, artifact)
+
+    enriched: list[dict[str, object]] = []
+    for result in sandbox_results:
+        item = dict(result)
+        matches = [index[key] for key in identity_values(item) if key in index]
+        artifact = matches[0] if matches else None
+        if artifact:
+            item.setdefault("m4_artifact_id", artifact.get("artifact_id"))
+            item.setdefault("artifact_name", artifact.get("filename") or artifact.get("artifact_name"))
+            item.setdefault("filename", artifact.get("filename") or artifact.get("artifact_name"))
+            item.setdefault("artifact_sha256", artifact.get("sha256") or artifact.get("artifact_sha256"))
+            item.setdefault("sha256", artifact.get("sha256") or artifact.get("artifact_sha256"))
+            item.setdefault("quarantine_path", artifact.get("quarantine_path") or artifact.get("stored_path"))
+            item.setdefault("download_url", artifact.get("download_url"))
+        enriched.append(item)
+
+    return enriched
+
+
+def embedded_sandbox_results(scope: set[str], artifacts: list[dict[str, object]] | None = None) -> list[dict[str, object]]:
     embedded: list[dict[str, object]] = []
     if not remote_dashboard_data_enabled():
         return embedded
 
-    for endpoint in ("/api/quarantine", "/api/quarantine/ready"):
-        payload, _ = load_remote_json(f"{configured_m4_backend_url()}{endpoint}", timeout=4.0)
-        for artifact in list_from_payload(payload, "artifacts", "quarantine", "results", "items", "data"):
-            sandbox_result = artifact.get("sandbox_result")
-            if not isinstance(sandbox_result, dict):
-                continue
-            item = dict(sandbox_result)
-            item.setdefault("artifact_id", artifact.get("artifact_id"))
-            item.setdefault("alert_id", artifact.get("alert_id"))
-            item.setdefault("artifact_name", artifact.get("filename") or artifact.get("artifact_name"))
-            item.setdefault("artifact_sha256", artifact.get("sha256"))
-            item.setdefault("quarantine_path", artifact.get("quarantine_path") or artifact.get("stored_path"))
-            if matches_dashboard_scope(item, scope):
-                embedded.append(item)
+    for artifact in artifacts if artifacts is not None else remote_quarantine_artifacts():
+        sandbox_result = artifact.get("sandbox_result")
+        if not isinstance(sandbox_result, dict):
+            continue
+        item = dict(sandbox_result)
+        item.setdefault("artifact_id", artifact.get("artifact_id"))
+        item.setdefault("alert_id", artifact.get("alert_id"))
+        item.setdefault("artifact_name", artifact.get("filename") or artifact.get("artifact_name"))
+        item.setdefault("filename", artifact.get("filename") or artifact.get("artifact_name"))
+        item.setdefault("artifact_sha256", artifact.get("sha256"))
+        item.setdefault("sha256", artifact.get("sha256"))
+        item.setdefault("quarantine_path", artifact.get("quarantine_path") or artifact.get("stored_path"))
+        if matches_dashboard_scope(item, scope):
+            embedded.append(item)
     return embedded
 
 
@@ -108,6 +177,7 @@ def identity_values(item: dict[str, object]) -> set[str]:
             value = details.get(key)
             if value:
                 values.add(str(value))
+    values.update(hash_identity_values(item))
     return values
 
 
@@ -294,7 +364,9 @@ def load_sandbox_results() -> list[dict[str, object]]:
                 "data",
             )
         )
-        remote_items.extend(embedded_sandbox_results(scope))
+        remote_artifacts = remote_quarantine_artifacts()
+        remote_items = enrich_sandbox_results_with_artifacts(remote_items, remote_artifacts)
+        remote_items.extend(embedded_sandbox_results(scope, remote_artifacts))
         remote_items = [item for item in remote_items if matches_dashboard_scope(item, scope)]
 
     results_file = root / "backend" / "data" / "sandbox_results.json"
@@ -509,8 +581,16 @@ def synthetic_dashboard_remediations(config: QuarantineConfig) -> list[dict[str,
     return plans
 
 
-def first_match(items: list[dict[str, object]], *, alert_id: object = None, artifact_id: object = None) -> dict[str, object] | None:
+def first_match(
+    items: list[dict[str, object]],
+    *,
+    alert_id: object = None,
+    artifact_id: object = None,
+    reference: dict[str, object] | None = None,
+) -> dict[str, object] | None:
     expected = {str(value) for value in (alert_id, artifact_id) if value}
+    if reference:
+        expected.update(identity_values(reference))
     if not expected:
         return None
     for item in items:
@@ -597,9 +677,10 @@ def build_cases(config: QuarantineConfig) -> list[dict[str, object]]:
         artifact_id = identifiers.get("artifact_id")
         alert = first_match(alerts, alert_id=alert_id, artifact_id=artifact_id)
         record = first_match(quarantine_records, alert_id=alert_id, artifact_id=artifact_id)
-        sandbox = first_match(sandbox_results, alert_id=alert_id, artifact_id=artifact_id)
-        remediation = first_match(remediations, alert_id=alert_id, artifact_id=artifact_id)
-        report = first_match(reports, alert_id=alert_id, artifact_id=artifact_id)
+        reference = record or alert
+        sandbox = first_match(sandbox_results, alert_id=alert_id, artifact_id=artifact_id, reference=reference)
+        remediation = first_match(remediations, alert_id=alert_id, artifact_id=artifact_id, reference=reference or sandbox)
+        report = first_match(reports, alert_id=alert_id, artifact_id=artifact_id, reference=reference or sandbox or remediation)
 
         m1 = stage(
             "m1",
@@ -765,9 +846,9 @@ def build_dashboard_report_html(report_id: str, config: QuarantineConfig) -> tup
     record = first_match(records, artifact_id=artifact_id)
     alert_id = (record or {}).get("alert_id")
     alert = first_match(alerts, alert_id=alert_id, artifact_id=artifact_id)
-    sandbox = first_match(sandbox_results, alert_id=alert_id, artifact_id=artifact_id)
-    remediation = first_match(remediations, alert_id=alert_id, artifact_id=artifact_id)
-    case = first_match(cases, alert_id=alert_id, artifact_id=artifact_id)
+    sandbox = first_match(sandbox_results, alert_id=alert_id, artifact_id=artifact_id, reference=record or alert)
+    remediation = first_match(remediations, alert_id=alert_id, artifact_id=artifact_id, reference=record or alert or sandbox)
+    case = first_match(cases, alert_id=alert_id, artifact_id=artifact_id, reference=record or alert or sandbox or remediation)
 
     filename = (
         (record or {}).get("filename")

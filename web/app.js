@@ -152,30 +152,86 @@ function matchingCases() {
   return state.cases.filter(queryMatches);
 }
 
+function identityTokens(record) {
+  const tokens = new Set();
+  const add = (value) => {
+    if (value !== undefined && value !== null && value !== "") tokens.add(String(value));
+  };
+  const addHash = (kind, value) => {
+    if (value !== undefined && value !== null && value !== "") tokens.add(`${kind}:${String(value).toLowerCase()}`);
+  };
+
+  add(record?.artifact_id);
+  add(record?.alert_id);
+  add(record?.m4_artifact_id);
+  add(record?.details?.artifact_id);
+  add(record?.details?.m2_artifact_id);
+  add(record?.details?.alert_id);
+
+  addHash("sha256", record?.sha256);
+  addHash("sha256", record?.artifact_sha256);
+  addHash("sha256", record?.downloaded_sha256);
+  addHash("sha256", record?.details?.sha256);
+  addHash("sha256", record?.hashes?.sha256);
+  addHash("md5", record?.md5 || record?.hashes?.md5);
+  addHash("sha1", record?.sha1 || record?.hashes?.sha1);
+  return tokens;
+}
+
 function sameArtifact(left, right) {
-  const leftIds = [left?.artifact_id, left?.alert_id, left?.details?.m2_artifact_id].filter(Boolean).map(String);
-  const rightIds = [right?.artifact_id, right?.alert_id, right?.details?.m2_artifact_id].filter(Boolean).map(String);
-  return leftIds.some((value) => rightIds.includes(value));
+  const leftTokens = identityTokens(left);
+  const rightTokens = identityTokens(right);
+  return [...leftTokens].some((value) => rightTokens.has(value));
+}
+
+function linkReason(result, record) {
+  if (result?.artifact_id && record?.artifact_id && String(result.artifact_id) === String(record.artifact_id)) return "artifact_id";
+  if (result?.alert_id && record?.alert_id && String(result.alert_id) === String(record.alert_id)) return "alert_id";
+  const resultHashes = [...identityTokens(result)].filter((token) => token.startsWith("sha"));
+  const recordHashes = identityTokens(record);
+  if (resultHashes.some((token) => recordHashes.has(token))) return "hash";
+  return "correlation";
 }
 
 function sandboxDisplayItems() {
   const results = state.sandbox.filter(queryMatches);
-  const placeholders = state.quarantine
+  const usedResults = new Set();
+  const fromQuarantine = state.quarantine
     .filter((record) => queryMatches(record))
     .filter((record) => record.ready_for_sandbox === true)
-    .filter((record) => !results.some((result) => sameArtifact(result, record)))
-    .map((record) => ({
-      artifact_id: record.artifact_id,
-      alert_id: record.alert_id,
-      artifact_name: artifactName(record),
-      execution_status: "WAITING_M4_RESULT",
-      sandbox_status: "WAITING_M4_RESULT",
-      behavior_summary: "Artefact pret pour sandbox, mais aucun resultat sandbox correspondant n'est encore visible dans M4.",
-      quarantine_path: record.quarantine_path || record.artifact_path,
-      artifact_sha256: record.sha256,
-      _placeholder: true
-    }));
-  return [...results, ...placeholders];
+    .map((record) => {
+      const result = results.find((item, index) => !usedResults.has(index) && sameArtifact(item, record));
+      if (result) {
+        const index = results.indexOf(result);
+        usedResults.add(index);
+        return {
+          ...result,
+          artifact_id: record.artifact_id || result.artifact_id,
+          alert_id: record.alert_id || result.alert_id,
+          artifact_name: artifactName(record) || result.artifact_name,
+          local_artifact_id: record.artifact_id,
+          m4_artifact_id: result.artifact_id,
+          local_alert_id: record.alert_id,
+          m4_alert_id: result.alert_id,
+          artifact_sha256: record.sha256 || result.artifact_sha256 || result.sha256,
+          quarantine_path: record.quarantine_path || record.artifact_path || result.quarantine_path,
+          _linked_by: linkReason(result, record)
+        };
+      }
+      return {
+        artifact_id: record.artifact_id,
+        alert_id: record.alert_id,
+        artifact_name: artifactName(record),
+        execution_status: "WAITING_M4_RESULT",
+        sandbox_status: "WAITING_M4_RESULT",
+        behavior_summary: "Artefact pret pour M3, mais M4 ne montre aucun resultat sandbox correspondant. Verifie que cet artifact_id est expose dans /api/quarantine/ready ou que le hash envoye par M3 est le meme.",
+        quarantine_path: record.quarantine_path || record.artifact_path,
+        artifact_sha256: record.sha256,
+        _placeholder: true
+      };
+    });
+  const unmatchedResults = results.filter((_, index) => !usedResults.has(index));
+  return [...fromQuarantine, ...unmatchedResults];
 }
 
 function listCount(value) {
@@ -632,6 +688,8 @@ function renderSandboxDetail(result) {
       </div>
       ${detailRow("status", status)}
       ${detailRow("interpretation", explanation, true)}
+      ${result.m4_artifact_id && result.local_artifact_id && result.m4_artifact_id !== result.local_artifact_id ? detailRow("m4 artifact", result.m4_artifact_id, true) : ""}
+      ${result._linked_by ? detailRow("linked by", result._linked_by) : ""}
       ${detailRow("vm", result.vm_name || result.sandbox_vm || result.sandbox_id)}
       ${detailRow("snapshot", result.snapshot_name || result.snapshot_used)}
       ${detailRow("exit code", valueOrDash(result.exit_code))}
