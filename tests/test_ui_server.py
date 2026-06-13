@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -86,6 +87,61 @@ class UiServerTest(unittest.TestCase):
             self.assertEqual(len(cases), 1)
             self.assertEqual(cases[0]["status"], "IN_PROGRESS")
             self.assertEqual(cases[0]["stopped_at"], "M3 Sandbox")
+
+    def test_cases_merge_agent_alert_with_remote_sandbox_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = QuarantineConfig(storage_root=root / "storage")
+            manager = QuarantineManager(config)
+            RootkitLabSimulator(root / "victim").quarantine_scenario("kernel-module", manager)
+
+            pending_alerts = root / "pending_alerts.jsonl"
+            pending_alerts.write_text(
+                json.dumps(
+                    {
+                        "alert_id": "ALT-LAB-KMOD-0001",
+                        "timestamp": "2026-06-13T13:29:00Z",
+                        "source_module": "file_monitor",
+                        "severity": "HIGH",
+                        "type": "EXECUTABLE_IN_SUSPICIOUS_DIR",
+                        "description": "test alert",
+                        "details": {"m2_artifact_id": "ART-ALT-LAB-KMOD-0001"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            def fake_remote(url, **_kwargs):
+                if url.endswith("/api/sandbox/results"):
+                    return (
+                        {
+                            "results": [
+                                {
+                                    "artifact_id": "ART-ALT-LAB-KMOD-0001",
+                                    "alert_id": "ALT-LAB-KMOD-0001",
+                                    "execution_status": "COMPLETED",
+                                    "finished_at": "2026-06-13T13:31:00Z",
+                                }
+                            ]
+                        },
+                        None,
+                    )
+                return ({}, None)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "ROOTRAP_PENDING_ALERTS_FILE": str(pending_alerts),
+                    "ROOTRAP_STORAGE_ROOT": str(config.storage_root),
+                    "ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA": "1",
+                },
+            ), patch("evidence_quarantine.ui_server.load_remote_json", side_effect=fake_remote):
+                cases = build_cases(config)
+
+            self.assertEqual(len(cases), 1)
+            sandbox_stage = next(stage for stage in cases[0]["timeline"] if stage["id"] == "m3")
+            self.assertEqual(sandbox_stage["status"], "DONE")
 
 
 if __name__ == "__main__":

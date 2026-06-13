@@ -56,6 +56,18 @@ def merge_records(*collections: list[dict[str, object]], identity_keys: tuple[st
     return sorted(merged.values(), key=timestamp_key, reverse=True)
 
 
+def list_from_payload(payload: dict[str, object] | list[object] | None, *keys: str) -> list[dict[str, object]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
 def runtime_config() -> QuarantineConfig:
     return QuarantineConfig(storage_root=rootrap_storage_root() or repo_root() / "runtime" / "rootrap")
 
@@ -69,7 +81,7 @@ def identity_values(item: dict[str, object]) -> set[str]:
 
     details = item.get("details")
     if isinstance(details, dict):
-        for key in ("alert_id", "artifact_id"):
+        for key in ("alert_id", "artifact_id", "m2_artifact_id"):
             value = details.get(key)
             if value:
                 values.add(str(value))
@@ -249,12 +261,16 @@ def load_sandbox_results() -> list[dict[str, object]]:
 
     if remote_dashboard_data_enabled():
         remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/sandbox/results", timeout=4.0)
-        if isinstance(remote_payload, dict):
-            remote_results = remote_payload.get("results")
-            if isinstance(remote_results, list):
-                remote_items.extend(item for item in remote_results if isinstance(item, dict))
-        elif isinstance(remote_payload, list):
-            remote_items.extend(item for item in remote_payload if isinstance(item, dict))
+        remote_items.extend(
+            list_from_payload(
+                remote_payload,
+                "results",
+                "sandbox_results",
+                "sandbox",
+                "items",
+                "data",
+            )
+        )
         remote_items = [item for item in remote_items if matches_dashboard_scope(item, scope)]
 
     results_file = root / "backend" / "data" / "sandbox_results.json"
@@ -301,12 +317,7 @@ def load_reports() -> list[dict[str, object]]:
 
     if remote_dashboard_data_enabled():
         remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/reports", timeout=4.0)
-        if isinstance(remote_payload, dict):
-            remote_reports = remote_payload.get("reports")
-            if isinstance(remote_reports, list):
-                remote_items.extend(item for item in remote_reports if isinstance(item, dict))
-        if isinstance(remote_payload, list):
-            remote_items.extend(item for item in remote_payload if isinstance(item, dict))
+        remote_items.extend(list_from_payload(remote_payload, "reports", "results", "items", "data"))
         remote_items = [item for item in remote_items if matches_dashboard_scope(item, scope)]
 
     reports_file = root / "backend" / "data" / "reports.json"
@@ -536,7 +547,7 @@ def build_cases(config: QuarantineConfig) -> list[dict[str, object]]:
         artifact_id = item.get("artifact_id")
         details = item.get("details")
         if isinstance(details, dict):
-            artifact_id = artifact_id or details.get("artifact_id")
+            artifact_id = artifact_id or details.get("artifact_id") or details.get("m2_artifact_id")
         key = str(artifact_id or alert_id or "")
         if not key:
             continue
@@ -601,7 +612,14 @@ def build_cases(config: QuarantineConfig) -> list[dict[str, object]]:
             detail=remediation_detail,
         )
 
-        if report:
+        report_status_text = str((report or {}).get("status") or "").upper()
+        report_path_text = str((report or {}).get("report_path") or "")
+        has_final_report = bool(
+            report
+            and "SYNTHETIC" not in report_status_text
+            and not report_path_text.endswith("manifest.json")
+        )
+        if has_final_report:
             report_status = "DONE"
             report_detail = report.get("report_path") or report.get("status") or "Rapport disponible."
         elif m4["status"] == "DONE":

@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import time
 import hashlib
 import subprocess
@@ -570,8 +571,12 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None, demo_fast=Fal
 # Backend M4
 # ============================================================
 
+def configured_backend_url():
+    return os.getenv("ROOTKIT_DEFENSE_M4_URL", BACKEND_URL).rstrip("/")
+
+
 def send_result_to_backend(result):
-    url = BACKEND_URL.rstrip("/") + SANDBOX_RESULT_ENDPOINT
+    url = configured_backend_url() + SANDBOX_RESULT_ENDPOINT
     print(f"[+] Envoi resultat vers backend : {url}")
 
     behavior = result.get("behavior_summary", {})
@@ -646,8 +651,10 @@ def send_result_to_backend(result):
         response = requests.post(url, json=m4_payload, timeout=5)
         print(f"[+] Status backend : {response.status_code}")
         print(response.text)
+        response.raise_for_status()
     except Exception as e:
         print(f"[!] Backend indisponible ou endpoint non pret : {e}")
+        raise
 
 
 # ============================================================

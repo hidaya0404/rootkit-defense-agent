@@ -118,7 +118,24 @@ def create_metadata_file(artifact):
     return metadata_path
 
 
-def run_vmware_orchestrator(metadata_path, artifact_path):
+def remote_result_exists(artifact_id, backend_url):
+    url = backend_url.rstrip("/") + f"/api/sandbox/results/{artifact_id}"
+    try:
+        response = requests.get(url, timeout=8)
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return False
+
+    if isinstance(data, dict):
+        result = data.get("result") or data.get("sandbox_result") or data
+        return bool(result and not result.get("error"))
+    return bool(data)
+
+
+def run_vmware_orchestrator(metadata_path, artifact_path, backend_url):
     cmd = [
         sys.executable,
         "sandbox/sandbox_orchestrator_vmware.py",
@@ -131,7 +148,10 @@ def run_vmware_orchestrator(metadata_path, artifact_path):
     print("[+] Lancement automatique analyse VMware")
     print("[CMD]", " ".join(cmd))
 
-    result = subprocess.run(cmd)
+    env = os.environ.copy()
+    env["ROOTKIT_DEFENSE_M4_URL"] = backend_url.rstrip("/")
+
+    result = subprocess.run(cmd, env=env)
     return result.returncode
 
 
@@ -148,8 +168,10 @@ def process_once(backend_url):
             continue
 
         if artifact_id in processed:
-            print(f"[-] Deja traite : {artifact_id}")
-            continue
+            if remote_result_exists(artifact_id, backend_url):
+                print(f"[-] Deja traite et confirme M4 : {artifact_id}")
+                continue
+            print(f"[!] {artifact_id} marque traite localement, mais absent de M4 : relance analyse")
 
         if not artifact.get("ready_for_sandbox"):
             print(f"[-] Non pret sandbox : {artifact_id}")
@@ -159,12 +181,14 @@ def process_once(backend_url):
             artifact_path = download_artifact(artifact, backend_url)
             metadata_path = create_metadata_file(artifact)
 
-            code = run_vmware_orchestrator(metadata_path, artifact_path)
+            code = run_vmware_orchestrator(metadata_path, artifact_path, backend_url)
 
-            if code == 0:
+            if code == 0 and remote_result_exists(artifact_id, backend_url):
                 print(f"[+] Analyse terminee pour {artifact_id}")
                 processed.add(artifact_id)
                 save_processed(processed)
+            elif code == 0:
+                print(f"[!] Analyse executee, mais resultat non visible dans M4 : {artifact_id}")
             else:
                 print(f"[!] Analyse echouee pour {artifact_id}, code={code}")
 
