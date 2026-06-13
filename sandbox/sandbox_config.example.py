@@ -10,7 +10,7 @@ GUEST_IP = "192.168.56.111"
 
 REMOTE_WORKDIR = "/home/asma/sandbox_run"
 
-BACKEND_URL = "https://headers-temporary-nicholas-mug.trycloudflare.com"
+BACKEND_URL = "https://hint-shannon-deutsch-oklahoma.trycloudflare.com"
 QUARANTINE_ENDPOINT = "/api/quarantine"
 SANDBOX_RESULT_ENDPOINT = "/api/sandbox/results"
 

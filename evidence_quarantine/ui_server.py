@@ -10,12 +10,13 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
+from analysis.ai_remediation_advisor import build_ai_recommendation
 from evidence_quarantine.backend_client import build_quarantine_manifest
 from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.quarantine_manager import QuarantineManager
 from evidence_quarantine.storage import read_json
 
-DEFAULT_M4_BACKEND_URL = "https://headers-temporary-nicholas-mug.trycloudflare.com"
+DEFAULT_M4_BACKEND_URL = "https://hint-shannon-deutsch-oklahoma.trycloudflare.com"
 
 
 def rootrap_storage_root() -> Path | None:
@@ -29,8 +30,30 @@ def rootrap_log_dir() -> Path | None:
 
 
 def remote_dashboard_data_enabled() -> bool:
-    value = os.getenv("ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA", "0").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    value = os.getenv("ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA", "1").strip().lower()
+    return value in {"1", "true", "yes", "on", "remote", "remote-first"}
+
+
+def timestamp_key(item: dict[str, object]) -> str:
+    for key in ("received_at", "finished_at", "analysis_finished_at", "timestamp", "created_at", "generated_at"):
+        value = item.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def merge_records(*collections: list[dict[str, object]], identity_keys: tuple[str, ...]) -> list[dict[str, object]]:
+    merged: dict[str, dict[str, object]] = {}
+    fallback = 0
+    for collection in collections:
+        for item in collection:
+            key_parts = [str(item.get(key) or "") for key in identity_keys]
+            key = "|".join(key_parts).strip("|")
+            if not key:
+                fallback += 1
+                key = f"item-{fallback}"
+            merged[key] = {**merged.get(key, {}), **item}
+    return sorted(merged.values(), key=timestamp_key, reverse=True)
 
 
 def default_web_dir() -> Path:
@@ -157,6 +180,8 @@ def load_dashboard_alerts(config: QuarantineConfig) -> list[dict[str, object]]:
 
 def load_sandbox_results() -> list[dict[str, object]]:
     root = repo_root()
+    local_items: list[dict[str, object]] = []
+    remote_items: list[dict[str, object]] = []
 
     storage_root = rootrap_storage_root()
     if storage_root:
@@ -168,50 +193,46 @@ def load_sandbox_results() -> list[dict[str, object]]:
         for candidate in local_candidates:
             local_results = read_json(candidate, default=[])
             if isinstance(local_results, list):
-                items = [item for item in local_results if isinstance(item, dict)]
-                if items or not remote_dashboard_data_enabled():
-                    return items
+                local_items.extend(item for item in local_results if isinstance(item, dict))
             if isinstance(local_results, dict):
                 results = local_results.get("results")
                 if isinstance(results, list):
-                    items = [item for item in results if isinstance(item, dict)]
-                    if items or not remote_dashboard_data_enabled():
-                        return items
+                    local_items.extend(item for item in results if isinstance(item, dict))
 
-        collected: list[dict[str, object]] = []
         sandbox_dir = storage_root / "sandbox" / "results"
         if sandbox_dir.exists():
             for result_file in sorted(sandbox_dir.glob("*/sandbox_result.json")):
                 item = read_json(result_file, default={})
                 if isinstance(item, dict):
-                    collected.append(item)
-        if collected or not remote_dashboard_data_enabled():
-            return collected
+                    local_items.append(item)
 
     if remote_dashboard_data_enabled():
         remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/sandbox/results", timeout=4.0)
         if isinstance(remote_payload, dict):
             remote_results = remote_payload.get("results")
             if isinstance(remote_results, list):
-                return [item for item in remote_results if isinstance(item, dict)]
+                remote_items.extend(item for item in remote_results if isinstance(item, dict))
+        elif isinstance(remote_payload, list):
+            remote_items.extend(item for item in remote_payload if isinstance(item, dict))
 
     results_file = root / "backend" / "data" / "sandbox_results.json"
     results = read_json(results_file, default=[])
     if isinstance(results, list) and results:
-        return results
+        local_items.extend(item for item in results if isinstance(item, dict))
 
-    collected: list[dict[str, object]] = []
     sandbox_dir = root / "sandbox" / "results"
     if sandbox_dir.exists():
         for result_file in sorted(sandbox_dir.glob("*/sandbox_result.json")):
             item = read_json(result_file, default={})
             if isinstance(item, dict):
-                collected.append(item)
-    return collected
+                local_items.append(item)
+    return merge_records(remote_items, local_items, identity_keys=("artifact_id", "started_at", "received_at"))
 
 
 def load_reports() -> list[dict[str, object]]:
     root = repo_root()
+    local_items: list[dict[str, object]] = []
+    remote_items: list[dict[str, object]] = []
 
     storage_root = rootrap_storage_root()
     if storage_root:
@@ -222,41 +243,84 @@ def load_reports() -> list[dict[str, object]]:
         for candidate in local_candidates:
             local_reports = read_json(candidate, default=[])
             if isinstance(local_reports, list):
-                items = [item for item in local_reports if isinstance(item, dict)]
-                if items or not remote_dashboard_data_enabled():
-                    return items
+                local_items.extend(item for item in local_reports if isinstance(item, dict))
             if isinstance(local_reports, dict):
                 reports = local_reports.get("reports")
                 if isinstance(reports, list):
-                    items = [item for item in reports if isinstance(item, dict)]
-                    if items or not remote_dashboard_data_enabled():
-                        return items
+                    local_items.extend(item for item in reports if isinstance(item, dict))
 
         reports_dir = storage_root / "reports"
         if reports_dir.exists():
-            items = [
-                {"report_path": str(path), "filename": path.name}
+            local_items.extend(
+                {"report_path": str(path), "filename": path.name, "status": "LOCAL_HTML"}
                 for path in sorted(reports_dir.glob("*.html"))
-            ]
-            if items or not remote_dashboard_data_enabled():
-                return items
-        if not remote_dashboard_data_enabled():
-            return []
+            )
 
     if remote_dashboard_data_enabled():
         remote_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/reports", timeout=4.0)
         if isinstance(remote_payload, dict):
             remote_reports = remote_payload.get("reports")
             if isinstance(remote_reports, list):
-                return [item for item in remote_reports if isinstance(item, dict)]
+                remote_items.extend(item for item in remote_reports if isinstance(item, dict))
         if isinstance(remote_payload, list):
-            return [item for item in remote_payload if isinstance(item, dict)]
+            remote_items.extend(item for item in remote_payload if isinstance(item, dict))
 
     reports_file = root / "backend" / "data" / "reports.json"
     reports = read_json(reports_file, default=[])
     if isinstance(reports, list):
-        return reports
-    return []
+        local_items.extend(item for item in reports if isinstance(item, dict))
+
+    merged = merge_records(remote_items, local_items, identity_keys=("report_id", "artifact_id", "report_path"))
+    if merged:
+        return merged
+    return synthetic_dashboard_reports()
+
+
+def risk_score_from_level(risk_level: object) -> int:
+    mapping = {
+        "CRITICAL": 92,
+        "HIGH": 78,
+        "MEDIUM": 48,
+        "LOW": 20,
+    }
+    return mapping.get(str(risk_level or "").upper(), 50)
+
+
+def synthetic_dashboard_reports() -> list[dict[str, object]]:
+    quarantine_records = load_ui_records(QuarantineConfig(storage_root=rootrap_storage_root() or repo_root() / "runtime" / "rootrap"))
+    if not quarantine_records and remote_dashboard_data_enabled():
+        ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
+        if isinstance(ready_payload, dict):
+            ready_items = ready_payload.get("artifacts") or ready_payload.get("results") or []
+            if isinstance(ready_items, list):
+                quarantine_records = [item for item in ready_items if isinstance(item, dict)]
+        elif isinstance(ready_payload, list):
+            quarantine_records = [item for item in ready_payload if isinstance(item, dict)]
+
+    sandbox_by_artifact = {
+        item.get("artifact_id"): item
+        for item in load_sandbox_results()
+        if item.get("artifact_id")
+    }
+    reports = []
+    for record in quarantine_records:
+        artifact_id = record.get("artifact_id")
+        risk_level = record.get("risk_level") or "MEDIUM"
+        reports.append(
+            {
+                "report_id": f"RPT-{artifact_id}",
+                "artifact_id": artifact_id,
+                "alert_id": record.get("alert_id"),
+                "timestamp": record.get("created_at") or record.get("detected_at"),
+                "risk_score": risk_score_from_level(risk_level),
+                "risk_level": risk_level,
+                "status": "SYNTHETIC_INCIDENT_SUMMARY",
+                "report_path": record.get("manifest_path"),
+                "pdf_report_path": None,
+                "sandbox_status": sandbox_by_artifact.get(artifact_id, {}).get("execution_status"),
+            }
+        )
+    return reports
 
 
 def _artifact_candidates(config: QuarantineConfig) -> list[str]:
@@ -306,7 +370,72 @@ def load_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
             item.setdefault("artifact_id", artifact_id)
             remediations.append(item)
 
-    return remediations
+    if remediations:
+        return remediations
+
+    return synthetic_dashboard_remediations(config)
+
+
+def synthetic_dashboard_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
+    records = load_ui_records(config)
+    if not records and remote_dashboard_data_enabled():
+        ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
+        if isinstance(ready_payload, dict):
+            ready_items = ready_payload.get("artifacts") or ready_payload.get("results") or []
+            if isinstance(ready_items, list):
+                records = [item for item in ready_items if isinstance(item, dict)]
+        elif isinstance(ready_payload, list):
+            records = [item for item in ready_payload if isinstance(item, dict)]
+
+    sandbox_by_artifact = {
+        item.get("artifact_id"): item
+        for item in load_sandbox_results()
+        if item.get("artifact_id")
+    }
+
+    plans: list[dict[str, object]] = []
+    for record in records:
+        artifact_id = record.get("artifact_id")
+        risk_level = str(record.get("risk_level") or "HIGH").upper()
+        artifact = {
+            **record,
+            "analysis": {
+                "risk_level": risk_level,
+                "risk_score": risk_score_from_level(risk_level),
+                "iocs": {
+                    "paths": [record.get("original_path")] if record.get("original_path") else [],
+                    "hashes": [record.get("sha256")] if record.get("sha256") else [],
+                },
+                "sandbox_result": sandbox_by_artifact.get(artifact_id),
+            },
+        }
+        ai = build_ai_recommendation(artifact)
+        actions = [
+            {
+                "step": index + 1,
+                "title": "AI remediation advisor",
+                "action": action,
+                "command": "Validation humaine obligatoire avant action destructive.",
+                "status": "AI_RECOMMENDED",
+            }
+            for index, action in enumerate(ai.get("recommended_actions", [])[:8])
+        ]
+        plans.append(
+            {
+                "remediation_id": f"REM-{artifact_id}",
+                "artifact_id": artifact_id,
+                "alert_id": record.get("alert_id"),
+                "generated_at": record.get("created_at") or record.get("received_at"),
+                "risk_level": ai.get("risk_level") or risk_level,
+                "risk_score": ai.get("risk_score") or risk_score_from_level(risk_level),
+                "decision": ai.get("decision"),
+                "ai_recommendation": ai,
+                "requires_human_validation": True,
+                "automatic_deletion": False,
+                "actions": actions,
+            }
+        )
+    return plans
 
 
 def configured_m4_backend_url() -> str:

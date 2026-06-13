@@ -233,7 +233,7 @@ case "$cmd" in
     ;;
   m2-once)
     run_evidence_quarantine auto-process-backend \
-      --backend-url "${ROOTKIT_DEFENSE_M4_URL:-https://headers-temporary-nicholas-mug.trycloudflare.com}" \
+      --backend-url "${ROOTKIT_DEFENSE_M4_URL:-https://hint-shannon-deutsch-oklahoma.trycloudflare.com}" \
       --interval "${ROOTRAP_M2_POLL_INTERVAL:-15}" \
       --status ARTIFACT_READY \
       --public-base-url "${ROOTRAP_PUBLIC_BASE_URL:-}" \

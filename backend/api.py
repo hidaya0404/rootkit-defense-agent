@@ -226,6 +226,75 @@ def select_downloadable_local_artifact(artifact: dict[str, Any]) -> tuple[Path |
     return None, None, mismatches
 
 
+def risk_score_from_level(risk_level: str | None) -> int:
+    mapping = {
+        "CRITICAL": 92,
+        "HIGH": 78,
+        "MEDIUM": 48,
+        "LOW": 20,
+    }
+    return mapping.get(str(risk_level or "").upper(), 50)
+
+
+def artifact_for_remediation(artifact: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(artifact)
+    analysis = enriched.get("analysis") if isinstance(enriched.get("analysis"), dict) else {}
+    if not analysis:
+        risk_level = str(enriched.get("risk_level") or "MEDIUM").upper()
+        analysis = {
+            "risk_level": risk_level,
+            "risk_score": risk_score_from_level(risk_level),
+            "iocs": {
+                "paths": [enriched.get("original_path")] if enriched.get("original_path") else [],
+                "hashes": [enriched.get("sha256")] if enriched.get("sha256") else [],
+            },
+            "yara_matches": [],
+        }
+
+    if enriched.get("sandbox_result"):
+        analysis.setdefault("sandbox_result", enriched.get("sandbox_result"))
+    if enriched.get("rootkit_category"):
+        analysis.setdefault("rootkit_category", enriched.get("rootkit_category"))
+
+    enriched["analysis"] = analysis
+    return enriched
+
+
+def synthetic_report_for_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
+    risk_level = str(artifact.get("risk_level") or artifact.get("analysis", {}).get("risk_level") or "MEDIUM").upper()
+    artifact_id = artifact.get("artifact_id")
+    return {
+        "report_id": f"RPT-{artifact_id}",
+        "artifact_id": artifact_id,
+        "alert_id": artifact.get("alert_id"),
+        "timestamp": artifact.get("created_at") or artifact.get("received_by_backend_at") or datetime.utcnow().isoformat() + "Z",
+        "risk_score": artifact.get("risk_score") or risk_score_from_level(risk_level),
+        "risk_level": risk_level,
+        "status": "SYNTHETIC_INCIDENT_SUMMARY",
+        "summary": "Operational report generated from quarantine, sandbox and remediation data.",
+        "report_path": artifact.get("manifest_path"),
+        "pdf_report_path": None,
+    }
+
+
+def synthetic_report_summaries() -> list[dict[str, Any]]:
+    artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
+    sandbox_results = load_json(SANDBOX_RESULTS_FILE)
+    sandbox_by_artifact = {
+        item.get("artifact_id"): item
+        for item in sandbox_results
+        if isinstance(item, dict) and item.get("artifact_id")
+    }
+
+    reports = []
+    for artifact in artifacts:
+        artifact = dict(artifact)
+        if artifact.get("artifact_id") in sandbox_by_artifact:
+            artifact["sandbox_result"] = sandbox_by_artifact[artifact.get("artifact_id")]
+        reports.append(synthetic_report_for_artifact(artifact_for_remediation(artifact)))
+    return reports
+
+
 @app.get("/")
 def home():
     return {
@@ -379,15 +448,41 @@ def analyze_artifact(artifact_id: str):
 @app.get("/api/reports")
 def get_reports():
     reports = load_json(REPORTS_FILE)
+    if not reports:
+        reports = synthetic_report_summaries()
 
     return {
         "count": len(reports),
         "reports": reports
     }
 
+
+@app.get("/api/remediation")
+def list_remediation_items():
+    artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
+    sandbox_results = load_json(SANDBOX_RESULTS_FILE)
+    sandbox_by_artifact = {
+        item.get("artifact_id"): item
+        for item in sandbox_results
+        if isinstance(item, dict) and item.get("artifact_id")
+    }
+
+    remediations = []
+    for artifact in artifacts:
+        artifact = dict(artifact)
+        if artifact.get("artifact_id") in sandbox_by_artifact:
+            artifact["sandbox_result"] = sandbox_by_artifact[artifact.get("artifact_id")]
+        remediations.append(build_remediation_plan(artifact_for_remediation(artifact)))
+
+    return {
+        "count": len(remediations),
+        "remediations": remediations
+    }
+
+
 @app.get("/api/remediation/{artifact_id}")
 def get_remediation_plan(artifact_id: str):
-    artifacts = load_json(QUARANTINE_FILE)
+    artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
 
     artifact = next(
         (a for a in artifacts if a.get("artifact_id") == artifact_id),
@@ -397,13 +492,19 @@ def get_remediation_plan(artifact_id: str):
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    if "analysis" not in artifact:
-        raise HTTPException(
-            status_code=400,
-            detail="Artifact must be analyzed before remediation"
-        )
+    sandbox_results = load_json(SANDBOX_RESULTS_FILE)
+    sandbox_result = next(
+        (
+            item for item in sandbox_results
+            if isinstance(item, dict) and item.get("artifact_id") == artifact_id
+        ),
+        None
+    )
+    if sandbox_result:
+        artifact = dict(artifact)
+        artifact["sandbox_result"] = sandbox_result
 
-    remediation_plan = build_remediation_plan(artifact)
+    remediation_plan = build_remediation_plan(artifact_for_remediation(artifact))
 
     return {
         "message": "Remediation plan generated",
