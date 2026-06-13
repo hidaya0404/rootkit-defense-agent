@@ -155,7 +155,7 @@ GUEST_PASSWORD = "CHANGE_ME"
 
 REMOTE_WORKDIR = "/home/asma/sandbox_run"
 
-BACKEND_URL = "https://hint-shannon-deutsch-oklahoma.trycloudflare.com"
+BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
 SANDBOX_RESULT_ENDPOINT = "/api/sandbox/results"
 
 LOCAL_RESULTS_DIR = "sandbox/results"
@@ -444,7 +444,7 @@ POST /api/sandbox/results
 Exemple d’URL locale :
 
 ```text
-https://hint-shannon-deutsch-oklahoma.trycloudflare.com/api/sandbox/results
+https://sheet-different-operation-mature.trycloudflare.com/api/sandbox/results
 ```
 
 Si le backend n’est pas encore lancé ou si l’endpoint n’est pas encore disponible, le résultat est tout de même conservé localement dans :
