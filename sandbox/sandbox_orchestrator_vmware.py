@@ -25,6 +25,8 @@ from sandbox_config import (
     LOCAL_RESULTS_DIR,
 )
 
+CURRENT_M4_BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
+
 
 # ============================================================
 # Utils
@@ -126,7 +128,7 @@ def download_artifact_from_backend(artifact_info):
     if download_url.startswith("http://") or download_url.startswith("https://"):
         url = download_url
     else:
-        url = urljoin(BACKEND_URL.rstrip("/") + "/", download_url.lstrip("/"))
+        url = urljoin(configured_backend_url() + "/", download_url.lstrip("/"))
 
     artifact_id = artifact_info.get("artifact_id", "artifact")
     filename = artifact_info.get("filename", "artifact.bin")
@@ -572,7 +574,7 @@ def analyze_artifact(local_artifact_path=None, artifact_info=None, demo_fast=Fal
 # ============================================================
 
 def configured_backend_url():
-    return os.getenv("ROOTKIT_DEFENSE_M4_URL", BACKEND_URL).rstrip("/")
+    return (os.getenv("ROOTKIT_DEFENSE_M4_URL") or CURRENT_M4_BACKEND_URL or BACKEND_URL).rstrip("/")
 
 
 def send_result_to_backend(result):

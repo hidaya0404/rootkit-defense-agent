@@ -13,14 +13,16 @@ import requests
 try:
     from sandbox_config import BACKEND_URL as CONFIG_BACKEND_URL
 except ImportError:
-    CONFIG_BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
+    CONFIG_BACKEND_URL = ""
 
 
+CURRENT_M4_BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
 READY_ENDPOINT = "/api/quarantine/ready"
 PROCESSED_FILE = Path("sandbox/processed_artifacts.json")
 DOWNLOAD_DIR = Path("sandbox/downloaded_artifacts")
 METADATA_DIR = Path("sandbox/auto_metadata")
-DEFAULT_BACKEND_URL = os.getenv("ROOTKIT_DEFENSE_M4_URL", CONFIG_BACKEND_URL).rstrip("/")
+DEFAULT_BACKEND_URL = os.getenv("ROOTKIT_DEFENSE_M4_URL") or CURRENT_M4_BACKEND_URL or CONFIG_BACKEND_URL
+DEFAULT_BACKEND_URL = DEFAULT_BACKEND_URL.rstrip("/")
 
 
 def load_processed():
