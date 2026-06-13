@@ -56,6 +56,46 @@ def merge_records(*collections: list[dict[str, object]], identity_keys: tuple[st
     return sorted(merged.values(), key=timestamp_key, reverse=True)
 
 
+def runtime_config() -> QuarantineConfig:
+    return QuarantineConfig(storage_root=rootrap_storage_root() or repo_root() / "runtime" / "rootrap")
+
+
+def identity_values(item: dict[str, object]) -> set[str]:
+    values: set[str] = set()
+    for key in ("alert_id", "artifact_id"):
+        value = item.get(key)
+        if value:
+            values.add(str(value))
+
+    details = item.get("details")
+    if isinstance(details, dict):
+        for key in ("alert_id", "artifact_id"):
+            value = details.get(key)
+            if value:
+                values.add(str(value))
+    return values
+
+
+def dashboard_scope_ids(config: QuarantineConfig | None = None) -> set[str]:
+    """IDs created by this installation.
+
+    Remote M4 is shared during demos, so the UI must not display every remote
+    sandbox/report/remediation row. It only imports remote rows that match local
+    alerts or local quarantine records.
+    """
+
+    scope: set[str] = set()
+    for item in load_alerts():
+        scope.update(identity_values(item))
+    for item in load_ui_records(config or runtime_config()):
+        scope.update(identity_values(item))
+    return scope
+
+
+def matches_dashboard_scope(item: dict[str, object], scope: set[str]) -> bool:
+    return bool(scope and identity_values(item).intersection(scope))
+
+
 def default_web_dir() -> Path:
     repo_web = Path(__file__).resolve().parents[1] / "web"
     if repo_web.exists():
@@ -182,6 +222,7 @@ def load_sandbox_results() -> list[dict[str, object]]:
     root = repo_root()
     local_items: list[dict[str, object]] = []
     remote_items: list[dict[str, object]] = []
+    scope = dashboard_scope_ids()
 
     storage_root = rootrap_storage_root()
     if storage_root:
@@ -214,17 +255,18 @@ def load_sandbox_results() -> list[dict[str, object]]:
                 remote_items.extend(item for item in remote_results if isinstance(item, dict))
         elif isinstance(remote_payload, list):
             remote_items.extend(item for item in remote_payload if isinstance(item, dict))
+        remote_items = [item for item in remote_items if matches_dashboard_scope(item, scope)]
 
     results_file = root / "backend" / "data" / "sandbox_results.json"
     results = read_json(results_file, default=[])
     if isinstance(results, list) and results:
-        local_items.extend(item for item in results if isinstance(item, dict))
+        local_items.extend(item for item in results if isinstance(item, dict) and matches_dashboard_scope(item, scope))
 
     sandbox_dir = root / "sandbox" / "results"
     if sandbox_dir.exists():
         for result_file in sorted(sandbox_dir.glob("*/sandbox_result.json")):
             item = read_json(result_file, default={})
-            if isinstance(item, dict):
+            if isinstance(item, dict) and matches_dashboard_scope(item, scope):
                 local_items.append(item)
     return merge_records(remote_items, local_items, identity_keys=("artifact_id", "started_at", "received_at"))
 
@@ -233,6 +275,7 @@ def load_reports() -> list[dict[str, object]]:
     root = repo_root()
     local_items: list[dict[str, object]] = []
     remote_items: list[dict[str, object]] = []
+    scope = dashboard_scope_ids()
 
     storage_root = rootrap_storage_root()
     if storage_root:
@@ -264,11 +307,12 @@ def load_reports() -> list[dict[str, object]]:
                 remote_items.extend(item for item in remote_reports if isinstance(item, dict))
         if isinstance(remote_payload, list):
             remote_items.extend(item for item in remote_payload if isinstance(item, dict))
+        remote_items = [item for item in remote_items if matches_dashboard_scope(item, scope)]
 
     reports_file = root / "backend" / "data" / "reports.json"
     reports = read_json(reports_file, default=[])
     if isinstance(reports, list):
-        local_items.extend(item for item in reports if isinstance(item, dict))
+        local_items.extend(item for item in reports if isinstance(item, dict) and matches_dashboard_scope(item, scope))
 
     merged = merge_records(remote_items, local_items, identity_keys=("report_id", "artifact_id", "report_path"))
     if merged:
@@ -287,15 +331,7 @@ def risk_score_from_level(risk_level: object) -> int:
 
 
 def synthetic_dashboard_reports() -> list[dict[str, object]]:
-    quarantine_records = load_ui_records(QuarantineConfig(storage_root=rootrap_storage_root() or repo_root() / "runtime" / "rootrap"))
-    if not quarantine_records and remote_dashboard_data_enabled():
-        ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
-        if isinstance(ready_payload, dict):
-            ready_items = ready_payload.get("artifacts") or ready_payload.get("results") or []
-            if isinstance(ready_items, list):
-                quarantine_records = [item for item in ready_items if isinstance(item, dict)]
-        elif isinstance(ready_payload, list):
-            quarantine_records = [item for item in ready_payload if isinstance(item, dict)]
+    quarantine_records = load_ui_records(runtime_config())
 
     sandbox_by_artifact = {
         item.get("artifact_id"): item
@@ -331,19 +367,6 @@ def _artifact_candidates(config: QuarantineConfig) -> list[str]:
             if artifact_id and str(artifact_id) not in candidates:
                 candidates.append(str(artifact_id))
 
-    if remote_dashboard_data_enabled():
-        ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
-        ready_items: list[object] = []
-        if isinstance(ready_payload, dict):
-            value = ready_payload.get("artifacts") or ready_payload.get("results") or ready_payload.get("quarantine")
-            ready_items = value if isinstance(value, list) else []
-        elif isinstance(ready_payload, list):
-            ready_items = ready_payload
-        for item in ready_items:
-            artifact_id = item.get("artifact_id") if isinstance(item, dict) else None
-            if artifact_id and str(artifact_id) not in candidates:
-                candidates.append(str(artifact_id))
-
     return candidates[:6]
 
 
@@ -353,12 +376,23 @@ def load_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
 
     if remote_dashboard_data_enabled():
         remote_payload, _ = load_remote_json(f"{backend_url}/api/remediation", timeout=3.0)
+        scope = dashboard_scope_ids(config)
         if isinstance(remote_payload, dict):
             remote_results = remote_payload.get("results") or remote_payload.get("remediations")
             if isinstance(remote_results, list):
-                return [item for item in remote_results if isinstance(item, dict)]
+                filtered = [
+                    item for item in remote_results
+                    if isinstance(item, dict) and matches_dashboard_scope(item, scope)
+                ]
+                if filtered:
+                    return filtered
         if isinstance(remote_payload, list):
-            return [item for item in remote_payload if isinstance(item, dict)]
+            filtered = [
+                item for item in remote_payload
+                if isinstance(item, dict) and matches_dashboard_scope(item, scope)
+            ]
+            if filtered:
+                return filtered
 
     for artifact_id in _artifact_candidates(config):
         payload, error = load_remote_json(f"{backend_url}/api/remediation/{artifact_id}", timeout=2.0)
@@ -378,14 +412,6 @@ def load_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
 
 def synthetic_dashboard_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
     records = load_ui_records(config)
-    if not records and remote_dashboard_data_enabled():
-        ready_payload, _ = load_remote_json(f"{configured_m4_backend_url()}/api/quarantine/ready", timeout=4.0)
-        if isinstance(ready_payload, dict):
-            ready_items = ready_payload.get("artifacts") or ready_payload.get("results") or []
-            if isinstance(ready_items, list):
-                records = [item for item in ready_items if isinstance(item, dict)]
-        elif isinstance(ready_payload, list):
-            records = [item for item in ready_payload if isinstance(item, dict)]
 
     sandbox_by_artifact = {
         item.get("artifact_id"): item
@@ -436,6 +462,205 @@ def synthetic_dashboard_remediations(config: QuarantineConfig) -> list[dict[str,
             }
         )
     return plans
+
+
+def first_match(items: list[dict[str, object]], *, alert_id: object = None, artifact_id: object = None) -> dict[str, object] | None:
+    expected = {str(value) for value in (alert_id, artifact_id) if value}
+    if not expected:
+        return None
+    for item in items:
+        if identity_values(item).intersection(expected):
+            return item
+    return None
+
+
+def stage(
+    stage_id: str,
+    label: str,
+    status: str,
+    *,
+    timestamp: object = None,
+    detail: object = None,
+) -> dict[str, object]:
+    return {
+        "id": stage_id,
+        "label": label,
+        "status": status,
+        "timestamp": timestamp,
+        "detail": detail,
+    }
+
+
+def sandbox_stage_status(result: dict[str, object] | None) -> str:
+    if not result:
+        return "WAITING"
+    status = str(result.get("execution_status") or result.get("sandbox_status") or "").upper()
+    if status == "COMPLETED":
+        return "DONE"
+    if status in {"FAILED", "TIMEOUT", "ERROR"}:
+        return "BLOCKED"
+    return "WAITING"
+
+
+def quarantine_stage(record: dict[str, object] | None) -> dict[str, object]:
+    if not record:
+        return stage("m2", "M2 Quarantaine", "WAITING", detail="Aucun artefact mis en quarantaine pour cette alerte.")
+    status = str(record.get("status") or "UNKNOWN").upper()
+    integrity_verified = record.get("integrity_verified") is True
+    ready_for_sandbox = record.get("ready_for_sandbox") is True
+    if status == "REJECTED":
+        stage_status = "BLOCKED"
+        detail = record.get("rejection_reason") or "Artefact refuse par la politique de quarantaine."
+    elif not integrity_verified:
+        stage_status = "BLOCKED"
+        detail = "Integrite non verifiee: hash avant/apres ou SHA256 invalide."
+    elif status == "READY_FOR_ANALYSIS" and ready_for_sandbox:
+        stage_status = "DONE"
+        detail = "Copie securisee, hashes et manifest valides."
+    else:
+        stage_status = "WAITING"
+        detail = f"Statut actuel: {status}."
+    return stage("m2", "M2 Quarantaine", stage_status, timestamp=record.get("created_at"), detail=detail)
+
+
+def build_cases(config: QuarantineConfig) -> list[dict[str, object]]:
+    alerts = load_dashboard_alerts(config)
+    quarantine_records = load_ui_records(config)
+    sandbox_results = load_sandbox_results()
+    remediations = load_remediations(config)
+    reports = load_reports()
+
+    case_keys: dict[str, dict[str, object]] = {}
+    for item in [*alerts, *quarantine_records]:
+        alert_id = item.get("alert_id")
+        artifact_id = item.get("artifact_id")
+        details = item.get("details")
+        if isinstance(details, dict):
+            artifact_id = artifact_id or details.get("artifact_id")
+        key = str(artifact_id or alert_id or "")
+        if not key:
+            continue
+        case_keys.setdefault(key, {"alert_id": alert_id, "artifact_id": artifact_id})
+        if alert_id:
+            case_keys[key]["alert_id"] = alert_id
+        if artifact_id:
+            case_keys[key]["artifact_id"] = artifact_id
+
+    cases: list[dict[str, object]] = []
+    for key, identifiers in case_keys.items():
+        alert_id = identifiers.get("alert_id")
+        artifact_id = identifiers.get("artifact_id")
+        alert = first_match(alerts, alert_id=alert_id, artifact_id=artifact_id)
+        record = first_match(quarantine_records, alert_id=alert_id, artifact_id=artifact_id)
+        sandbox = first_match(sandbox_results, alert_id=alert_id, artifact_id=artifact_id)
+        remediation = first_match(remediations, alert_id=alert_id, artifact_id=artifact_id)
+        report = first_match(reports, alert_id=alert_id, artifact_id=artifact_id)
+
+        m1 = stage(
+            "m1",
+            "M1 Alerte",
+            "DONE" if alert else "WAITING",
+            timestamp=alert.get("timestamp") if alert else None,
+            detail=alert.get("description") if alert else "Aucune alerte visible cote agent.",
+        )
+        m2 = quarantine_stage(record)
+
+        sandbox_status = sandbox_stage_status(sandbox)
+        if not record:
+            sandbox_status = "PENDING"
+            sandbox_detail = "En attente de la quarantaine M2."
+        elif m2["status"] != "DONE":
+            sandbox_status = "PENDING"
+            sandbox_detail = "Artefact pas encore pret pour M3."
+        elif sandbox:
+            sandbox_detail = sandbox.get("error_message") or sandbox.get("behavior_summary") or "Resultat sandbox recu."
+        else:
+            sandbox_detail = "Pret pour M3, en attente du worker sandbox."
+        m3 = stage(
+            "m3",
+            "M3 Sandbox",
+            sandbox_status,
+            timestamp=(sandbox or {}).get("analysis_finished_at") or (sandbox or {}).get("finished_at"),
+            detail=sandbox_detail,
+        )
+
+        if m3["status"] != "DONE":
+            remediation_status = "PENDING"
+            remediation_detail = "En attente du resultat sandbox M3."
+        elif remediation:
+            remediation_status = "DONE"
+            remediation_detail = remediation.get("decision") or "Plan de remediation disponible."
+        else:
+            remediation_status = "WAITING"
+            remediation_detail = "En attente du scoring/remediation M4."
+        m4 = stage(
+            "m4",
+            "M4 Remediation",
+            remediation_status,
+            timestamp=(remediation or {}).get("generated_at") or (remediation or {}).get("created_at"),
+            detail=remediation_detail,
+        )
+
+        if report:
+            report_status = "DONE"
+            report_detail = report.get("report_path") or report.get("status") or "Rapport disponible."
+        elif m4["status"] == "DONE":
+            report_status = "WAITING"
+            report_detail = "Plan pret, rapport final pas encore publie."
+        else:
+            report_status = "PENDING"
+            report_detail = "En attente de la remediation M4."
+        report_stage = stage(
+            "report",
+            "Rapport",
+            report_status,
+            timestamp=(report or {}).get("timestamp") or (report or {}).get("created_at"),
+            detail=report_detail,
+        )
+
+        timeline = [m1, m2, m3, m4, report_stage]
+        blocked = next((item for item in timeline if item["status"] == "BLOCKED"), None)
+        waiting = next((item for item in timeline if item["status"] in {"WAITING", "PENDING"}), None)
+        stopped = blocked or waiting
+        if blocked:
+            case_status = "BLOCKED"
+        elif waiting:
+            case_status = "IN_PROGRESS"
+        else:
+            case_status = "COMPLETED"
+
+        timestamps = [
+            str(value)
+            for value in (
+                (alert or {}).get("timestamp"),
+                (record or {}).get("created_at"),
+                (sandbox or {}).get("analysis_finished_at") or (sandbox or {}).get("finished_at"),
+                (remediation or {}).get("generated_at") or (remediation or {}).get("created_at"),
+                (report or {}).get("timestamp") or (report or {}).get("created_at"),
+            )
+            if value
+        ]
+        cases.append(
+            {
+                "case_id": f"CASE-{artifact_id or alert_id or key}",
+                "alert_id": alert_id or (alert or {}).get("alert_id"),
+                "artifact_id": artifact_id or (record or sandbox or remediation or report or {}).get("artifact_id"),
+                "filename": (
+                    (record or {}).get("filename")
+                    or (record or {}).get("artifact_name")
+                    or (alert or {}).get("type")
+                    or "artifact"
+                ),
+                "risk_level": (record or {}).get("risk_level") or (alert or {}).get("severity") or (remediation or {}).get("risk_level"),
+                "status": case_status,
+                "stopped_at": stopped.get("label") if stopped else None,
+                "blocked_reason": stopped.get("detail") if stopped else None,
+                "last_update": max(timestamps) if timestamps else None,
+                "timeline": timeline,
+            }
+        )
+
+    return sorted(cases, key=lambda item: str(item.get("last_update") or ""), reverse=True)
 
 
 def configured_m4_backend_url() -> str:
@@ -644,6 +869,10 @@ def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequ
             if parsed.path == "/api/remediation":
                 remediations = load_remediations(config)
                 self._json({"count": len(remediations), "remediations": remediations})
+                return
+            if parsed.path == "/api/cases":
+                cases = build_cases(config)
+                self._json({"count": len(cases), "cases": cases})
                 return
             if parsed.path.startswith("/api/quarantine/"):
                 if self._quarantine_api(parsed.path, config):

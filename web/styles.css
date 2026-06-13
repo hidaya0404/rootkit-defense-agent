@@ -950,6 +950,75 @@ tbody tr.selected {
   overflow-wrap: anywhere;
 }
 
+.case-flow {
+  display: grid;
+  gap: 8px;
+}
+
+.case-stage {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(255, 42, 42, .18);
+  background: rgba(255, 42, 42, .035);
+  padding: 10px 10px 10px 14px;
+}
+
+.case-stage::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  bottom: -1px;
+  width: 3px;
+  background: var(--cyan);
+}
+
+.case-stage.ready::before,
+.case-stage.low::before {
+  background: var(--green);
+}
+
+.case-stage.medium::before {
+  background: var(--amber);
+}
+
+.case-stage.critical::before,
+.case-stage.high::before {
+  background: var(--red);
+}
+
+.case-stage div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.case-stage span {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.case-stage strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.case-stage p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.case-stage em {
+  color: var(--faint);
+  font-size: 10px;
+  font-style: normal;
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;

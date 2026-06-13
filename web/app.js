@@ -4,6 +4,7 @@ const state = {
   sandbox: [],
   reports: [],
   remediations: [],
+  cases: [],
   activeView: "dashboard",
   quarantineFilter: "ALL",
   query: "",
@@ -72,6 +73,8 @@ function severityClass(value) {
   if (normalized.includes("high") || normalized.includes("eleve")) return "high";
   if (normalized.includes("medium") || normalized.includes("moyen")) return "medium";
   if (normalized.includes("low") || normalized.includes("faible")) return "low";
+  if (normalized.includes("blocked") || normalized.includes("failed") || normalized.includes("timeout")) return "critical";
+  if (normalized.includes("waiting") || normalized.includes("pending") || normalized.includes("progress")) return "medium";
   if (normalized.includes("ready") || normalized.includes("complete") || normalized.includes("ok")) return "ready";
   return "info";
 }
@@ -143,6 +146,10 @@ function matchingQuarantine() {
 
 function matchingRemediations() {
   return state.remediations.filter(queryMatches);
+}
+
+function matchingCases() {
+  return state.cases.filter(queryMatches);
 }
 
 function setDonut(id, value, total, offset) {
@@ -354,6 +361,61 @@ function renderAlertDetail(alert) {
       ${detailRow("severity", alert.severity)}
       ${detailRow("timestamp", alert.timestamp)}
       ${detailRow("details", JSON.stringify(alert.details || {}, null, 2), true)}
+    </div>
+  `;
+}
+
+function renderCases() {
+  const items = matchingCases();
+  const rows = items.map((item, index) => `
+    <tr data-case-index="${index}">
+      <td class="mono">${escapeHtml(item.case_id || "-")}</td>
+      <td class="mono">${escapeHtml(item.alert_id || "-")}</td>
+      <td class="mono">${escapeHtml(item.artifact_id || item.filename || "-")}</td>
+      <td><span class="badge ${severityClass(item.status)}">${escapeHtml(item.status || "-")}</span></td>
+      <td>${escapeHtml(item.stopped_at || "flux complet")}</td>
+    </tr>
+  `);
+  $("#cases-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucune case locale</td></tr>`;
+  $$("#cases-table tr[data-case-index]").forEach((row) => {
+    row.addEventListener("click", () => {
+      $$("#cases-table tr").forEach((item) => item.classList.remove("selected"));
+      row.classList.add("selected");
+      renderCaseDetail(items[Number(row.dataset.caseIndex)]);
+    });
+  });
+  renderCaseDetail(items[0]);
+}
+
+function renderCaseDetail(item) {
+  const panel = $("#case-detail");
+  if (!item) {
+    panel.innerHTML = emptyState("Selectionner une case", "alert lifecycle");
+    return;
+  }
+  const timeline = Array.isArray(item.timeline) ? item.timeline : [];
+  panel.innerHTML = `
+    <div class="detail-stack">
+      <div class="detail-title">
+        <strong>${escapeHtml(item.case_id || item.artifact_id || item.alert_id || "case")}</strong>
+        <span>${escapeHtml(item.filename || "flux alerte vers rapport")}</span>
+      </div>
+      ${detailRow("status", item.status)}
+      ${detailRow("stopped at", item.stopped_at || "flux complet")}
+      ${detailRow("reason", item.blocked_reason || "-")}
+      ${detailRow("last update", item.last_update || "-")}
+      <div class="case-flow">
+        ${timeline.map((step) => `
+          <article class="case-stage ${severityClass(step.status)}">
+            <div>
+              <span>${escapeHtml(step.label || step.id)}</span>
+              <strong>${escapeHtml(step.status || "-")}</strong>
+            </div>
+            <p>${escapeHtml(step.detail || "-")}</p>
+            <em>${escapeHtml(step.timestamp || "")}</em>
+          </article>
+        `).join("")}
+      </div>
     </div>
   `;
 }
@@ -584,6 +646,7 @@ function setView(view) {
 function renderAll() {
   renderOverview();
   renderAlerts();
+  renderCases();
   renderQuarantine();
   renderSandbox();
   renderIocs();
@@ -595,18 +658,20 @@ async function loadData() {
   if (state.refreshInFlight) return;
   state.refreshInFlight = true;
   try {
-    const [alerts, quarantine, sandbox, reports, remediations] = await Promise.all([
+    const [alerts, quarantine, sandbox, reports, remediations, cases] = await Promise.all([
       fetchJson("/api/alerts", "alerts"),
       fetchJson("/api/quarantine", "quarantine"),
       fetchJson("/api/sandbox/results", "results"),
       fetchJson("/api/reports", "reports"),
-      fetchJson("/api/remediation", "remediations")
+      fetchJson("/api/remediation", "remediations"),
+      fetchJson("/api/cases", "cases")
     ]);
     state.alerts = alerts;
     state.quarantine = quarantine;
     state.sandbox = sandbox;
     state.reports = reports;
     state.remediations = remediations;
+    state.cases = cases;
     renderAll();
   } finally {
     state.refreshInFlight = false;
