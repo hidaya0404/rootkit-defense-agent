@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 from datetime import datetime, timezone
 
 from agent.monitor_processes import build_alert

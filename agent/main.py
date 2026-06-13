@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 
 import requests
 
@@ -18,6 +19,9 @@ from agent.monitor_files import (
 from agent.monitor_kernel import scan_kernel_modules
 from agent.monitor_network import scan_network
 from agent.monitor_processes import scan_processes
+from evidence_quarantine.config import QuarantineConfig
+from evidence_quarantine.models import QuarantineRequest, RiskLevel
+from evidence_quarantine.quarantine_manager import QuarantineManager
 
 
 os.makedirs(os.path.dirname(CONFIG["log_file"]) or ".", exist_ok=True)
@@ -35,6 +39,21 @@ _sent_alerts: dict = {}
 
 # Délai minimum entre deux alertes identiques (en secondes)
 ALERT_COOLDOWN = CONFIG.get("alert_cooldown", 300)  # 5 min par défaut
+
+
+def _m2_storage_root() -> Path:
+    return Path(
+        os.getenv("ROOTRAP_STORAGE_ROOT")
+        or os.getenv("ROOTKIT_DEFENSE_STORAGE")
+        or "/var/lib/rootrap"
+    ).expanduser()
+
+
+def _risk_level(value: object) -> RiskLevel:
+    try:
+        return RiskLevel[str(value or "MEDIUM").upper()]
+    except KeyError:
+        return RiskLevel.MEDIUM
 
 
 def _alert_signature(alert: dict) -> str:
@@ -85,6 +104,43 @@ def _send_alert_legacy(alert):
         print(f"[BACKEND] warning: {exc}")
 
 
+def quarantine_artifact_for_alert(alert: dict) -> str | None:
+    details = alert.setdefault("details", {})
+    file_path = details.get("path")
+    if not file_path or not os.path.isfile(file_path):
+        return None
+
+    manager = QuarantineManager(QuarantineConfig(storage_root=_m2_storage_root()))
+    result = manager.quarantine_artifact(
+        QuarantineRequest(
+            artifact_path=Path(str(file_path)),
+            detection_reason=str(alert.get("description") or alert.get("type") or "RootRAP detection"),
+            alert_id=str(alert.get("alert_id") or ""),
+            risk_level=_risk_level(alert.get("severity")),
+            detected_at=alert.get("timestamp"),
+            source_module=str(alert.get("source_module") or "agent"),
+            tags=["agent", "auto-quarantine", str(alert.get("type") or "alert")],
+        )
+    )
+
+    details["m2_artifact_id"] = result.artifact_id
+    details["m2_evidence_dir"] = str(result.evidence_dir)
+    details["m2_manifest_path"] = str(result.manifest_path) if result.manifest_path else None
+    details["m2_status"] = result.status.value
+    details["m2_errors"] = result.errors
+
+    if not result.success or not result.artifact_path:
+        return None
+
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except OSError as exc:
+        details["source_cleanup_warning"] = str(exc)
+
+    return str(result.artifact_path)
+
+
 def send_alert(alert):
     if is_duplicate(alert):
         return False
@@ -95,7 +151,9 @@ def send_alert(alert):
     if alert.get("details", {}).get("needs_quarantine"):
         file_path = alert["details"].get("path")
         if file_path and os.path.isfile(file_path):
-            quarantine_path = quarantine_file(file_path, alert["alert_id"])
+            quarantine_path = quarantine_artifact_for_alert(alert)
+            if not quarantine_path and os.path.isfile(file_path):
+                quarantine_path = quarantine_file(file_path, alert["alert_id"])
             if quarantine_path:
                 alert["details"]["quarantine_path"] = quarantine_path
 
