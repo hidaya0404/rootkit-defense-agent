@@ -121,20 +121,40 @@ def create_metadata_file(artifact):
 
 
 def remote_result_exists(artifact_id, backend_url):
-    url = backend_url.rstrip("/") + f"/api/sandbox/results/{artifact_id}"
+    base_url = backend_url.rstrip("/")
+    url = base_url + f"/api/sandbox/results/{artifact_id}"
     try:
         response = requests.get(url, timeout=8)
         if response.status_code == 404:
-            return False
+            raise RuntimeError("artifact endpoint returned 404")
         response.raise_for_status()
         data = response.json()
+        if _payload_has_artifact_result(data, artifact_id):
+            return True
+    except Exception:
+        pass
+
+    try:
+        response = requests.get(base_url + "/api/sandbox/results", timeout=8)
+        response.raise_for_status()
+        return _payload_has_artifact_result(response.json(), artifact_id)
     except Exception:
         return False
 
+
+def _payload_has_artifact_result(data, artifact_id):
     if isinstance(data, dict):
-        result = data.get("result") or data.get("sandbox_result") or data
-        return bool(result and not result.get("error"))
-    return bool(data)
+        for key in ("results", "sandbox_results", "items", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return any(item.get("artifact_id") == artifact_id for item in value if isinstance(item, dict))
+        result = data.get("result") or data.get("sandbox_result")
+        if isinstance(result, dict):
+            return result.get("artifact_id") == artifact_id
+        return data.get("artifact_id") == artifact_id and not data.get("error")
+    if isinstance(data, list):
+        return any(item.get("artifact_id") == artifact_id for item in data if isinstance(item, dict))
+    return False
 
 
 def run_vmware_orchestrator(metadata_path, artifact_path, backend_url):

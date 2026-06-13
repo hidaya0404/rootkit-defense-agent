@@ -1085,6 +1085,17 @@ tbody tr.selected {
   border: 1px solid var(--line);
   background: #070a08;
   padding: 10px;
+  cursor: pointer;
+}
+
+.sandbox-card:hover,
+.sandbox-card.selected {
+  border-color: rgba(255, 42, 42, .52);
+  background: rgba(255, 42, 42, .07);
+}
+
+.sandbox-card.waiting {
+  border-color: rgba(245, 196, 81, .36);
 }
 
 .sandbox-card header,
@@ -1103,6 +1114,48 @@ tbody tr.selected {
 .artifact-line strong {
   color: var(--text);
   font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.sandbox-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sandbox-detail-grid article,
+.sandbox-list-block {
+  border: 1px solid var(--line);
+  background: rgba(255, 42, 42, .035);
+  padding: 9px;
+}
+
+.sandbox-detail-grid span,
+.sandbox-list-block span {
+  display: block;
+  color: var(--faint);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.sandbox-detail-grid strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--green);
+  font-size: 20px;
+}
+
+.sandbox-list-block ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.sandbox-list-block li,
+.sandbox-list-block p {
+  margin: 5px 0;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
@@ -1325,6 +1378,7 @@ tbody tr.selected {
   .work-grid,
   .dual-grid,
   .sandbox-grid,
+  .sandbox-detail-grid,
   .config-grid {
     grid-template-columns: 1fr;
   }

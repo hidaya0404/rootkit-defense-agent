@@ -9,7 +9,14 @@ from tests import context  # noqa: F401
 from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.lab_simulator import RootkitLabSimulator
 from evidence_quarantine.quarantine_manager import QuarantineManager
-from evidence_quarantine.ui_server import build_cases, load_dashboard_alerts, load_sandbox_results
+from evidence_quarantine.ui_server import (
+    build_cases,
+    build_dashboard_report_html,
+    load_dashboard_alerts,
+    load_remediations,
+    load_reports,
+    load_sandbox_results,
+)
 
 
 class UiServerTest(unittest.TestCase):
@@ -142,6 +149,31 @@ class UiServerTest(unittest.TestCase):
             self.assertEqual(len(cases), 1)
             sandbox_stage = next(stage for stage in cases[0]["timeline"] if stage["id"] == "m3")
             self.assertEqual(sandbox_stage["status"], "DONE")
+
+    def test_local_remediation_and_report_download_are_generated_from_quarantine(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = QuarantineConfig(storage_root=root / "storage")
+            manager = QuarantineManager(config)
+            RootkitLabSimulator(root / "victim").quarantine_scenario("kernel-module", manager)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "ROOTRAP_PENDING_ALERTS_FILE": str(root / "missing.jsonl"),
+                    "ROOTRAP_STORAGE_ROOT": str(config.storage_root),
+                    "ROOTRAP_ENABLE_REMOTE_DASHBOARD_DATA": "0",
+                },
+            ):
+                remediations = load_remediations(config)
+                reports = load_reports()
+                body, filename = build_dashboard_report_html("RPT-ART-ALT-LAB-KMOD-0001", config)
+
+            self.assertEqual(len(remediations), 1)
+            self.assertEqual(remediations[0]["artifact_id"], "ART-ALT-LAB-KMOD-0001")
+            self.assertTrue(reports[0]["download_url"].endswith("/download"))
+            self.assertIn("RootRAP Incident Report", body)
+            self.assertEqual(filename, "rootrap-report-ART-ALT-LAB-KMOD-0001.html")
 
 
 if __name__ == "__main__":

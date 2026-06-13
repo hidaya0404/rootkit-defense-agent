@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from analysis.static_analyzer import analyze_file
 from analysis.report_generator import generate_html_report
@@ -263,17 +263,19 @@ def artifact_for_remediation(artifact: dict[str, Any]) -> dict[str, Any]:
 def synthetic_report_for_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     risk_level = str(artifact.get("risk_level") or artifact.get("analysis", {}).get("risk_level") or "MEDIUM").upper()
     artifact_id = artifact.get("artifact_id")
+    report_id = f"RPT-{artifact_id}"
     return {
-        "report_id": f"RPT-{artifact_id}",
+        "report_id": report_id,
         "artifact_id": artifact_id,
         "alert_id": artifact.get("alert_id"),
         "timestamp": artifact.get("created_at") or artifact.get("received_by_backend_at") or datetime.utcnow().isoformat() + "Z",
         "risk_score": artifact.get("risk_score") or risk_score_from_level(risk_level),
         "risk_level": risk_level,
-        "status": "SYNTHETIC_INCIDENT_SUMMARY",
+        "status": "INCIDENT_REPORT_READY",
         "summary": "Operational report generated from quarantine, sandbox and remediation data.",
-        "report_path": artifact.get("manifest_path"),
+        "report_path": None,
         "pdf_report_path": None,
+        "download_url": f"/api/reports/{report_id}/download",
     }
 
 
@@ -457,6 +459,152 @@ def get_reports():
     }
 
 
+def html_escape(value: Any) -> str:
+    import html
+
+    return html.escape(str(value if value is not None else "-"))
+
+
+def report_kv(rows: list[tuple[str, Any]]) -> str:
+    body = "".join(
+        f"<tr><th>{html_escape(label)}</th><td>{html_escape(value)}</td></tr>"
+        for label, value in rows
+    )
+    return f"<table>{body}</table>"
+
+
+def report_list(items: Any, empty: str = "Aucun element disponible.") -> str:
+    if not isinstance(items, list) or not items:
+        return f"<p class='muted'>{html_escape(empty)}</p>"
+    return "<ul>" + "".join(f"<li>{html_escape(item)}</li>" for item in items[:30]) + "</ul>"
+
+
+def report_pre(value: Any) -> str:
+    if isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, ensure_ascii=False, indent=2)
+    return f"<pre>{html_escape(value)}</pre>"
+
+
+def build_incident_report_html(report_id: str) -> tuple[str, str]:
+    artifact_id = report_id[4:] if report_id.startswith("RPT-") else report_id
+    artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
+    artifact = next((item for item in artifacts if item.get("artifact_id") == artifact_id), None)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Report artifact not found")
+
+    sandbox_results = [
+        item for item in load_json(SANDBOX_RESULTS_FILE)
+        if isinstance(item, dict) and item.get("artifact_id") == artifact_id
+    ]
+    sandbox = sandbox_results[-1] if sandbox_results else {}
+    enriched = dict(artifact)
+    if sandbox:
+        enriched["sandbox_result"] = sandbox
+    remediation = build_remediation_plan(artifact_for_remediation(enriched))
+    behavior = sandbox.get("behavior_summary") or "Aucun resultat sandbox recu pour cet artefact."
+
+    html_body = "\n".join(
+        [
+            "<!doctype html><html lang='fr'><head><meta charset='utf-8'>",
+            f"<title>RootRAP Report - {html_escape(artifact_id)}</title>",
+            "<style>",
+            "body{font-family:Arial,Helvetica,sans-serif;background:#090909;color:#f4eeee;margin:32px;line-height:1.45}",
+            "h1{color:#ff3b3b}h2{border-bottom:1px solid #5a1b1b;padding-bottom:6px;color:#fff}",
+            "section{border:1px solid #3a1717;background:#130b0b;margin:16px 0;padding:16px}",
+            "table{width:100%;border-collapse:collapse}th,td{border:1px solid #3a1717;padding:8px;text-align:left;vertical-align:top}",
+            "th{width:230px;color:#b99}.badge{display:inline-block;border:1px solid #ff3b3b;color:#55ff99;padding:4px 8px}",
+            "pre{white-space:pre-wrap;background:#050505;border:1px solid #3a1717;padding:12px;overflow-wrap:anywhere}.muted,em{color:#ad9999}",
+            "</style></head><body>",
+            "<h1>RootRAP Incident Report</h1>",
+            f"<p><span class='badge'>{html_escape(remediation.get('risk_level'))}</span></p>",
+            "<section><h2>Resume executif</h2>"
+            + report_kv(
+                [
+                    ("Report ID", report_id),
+                    ("Artifact ID", artifact_id),
+                    ("Alert ID", artifact.get("alert_id")),
+                    ("Fichier", artifact.get("filename") or artifact.get("artifact_name")),
+                    ("Risque", remediation.get("risk_level")),
+                    ("Score", remediation.get("risk_score")),
+                    ("Decision", remediation.get("decision")),
+                ]
+            )
+            + "</section>",
+            "<section><h2>Quarantaine M2</h2>"
+            + report_kv(
+                [
+                    ("Status", artifact.get("status")),
+                    ("Original path", artifact.get("original_path")),
+                    ("Quarantine path", artifact.get("quarantine_path") or artifact.get("stored_path")),
+                    ("SHA256", artifact.get("sha256")),
+                    ("Integrity", artifact.get("integrity_verified")),
+                    ("Ready for sandbox", artifact.get("ready_for_sandbox")),
+                ]
+            )
+            + "</section>",
+            "<section><h2>Analyse sandbox M3</h2>"
+            + report_kv(
+                [
+                    ("Execution", sandbox.get("execution_status") or sandbox.get("sandbox_status")),
+                    ("VM", sandbox.get("vm_name") or sandbox.get("sandbox_id")),
+                    ("Snapshot", sandbox.get("snapshot_name") or sandbox.get("snapshot_used")),
+                    ("Exit code", sandbox.get("exit_code")),
+                    ("Started", sandbox.get("started_at") or sandbox.get("analysis_started_at")),
+                    ("Finished", sandbox.get("finished_at") or sandbox.get("analysis_finished_at")),
+                ]
+            )
+            + "<h3>Resume comportemental</h3>"
+            + report_pre(behavior)
+            + "<h3>Processus observes</h3>"
+            + report_list(sandbox.get("observed_processes") or sandbox.get("processes_created"))
+            + "<h3>Connexions reseau</h3>"
+            + report_list(sandbox.get("network_events") or sandbox.get("network_connections"))
+            + "<h3>Fichiers crees/modifies</h3>"
+            + report_list((sandbox.get("files_created") or []) + (sandbox.get("files_modified") or []))
+            + "</section>",
+            "<section><h2>Remediation AI</h2>"
+            + report_kv(
+                [
+                    ("Validation humaine", remediation.get("requires_human_validation")),
+                    ("Suppression automatique", remediation.get("automatic_deletion")),
+                ]
+            )
+            + report_list(
+                [
+                    f"{action.get('step', '-')}. {action.get('title', 'Action')} - {action.get('action') or action.get('command')}"
+                    for action in remediation.get("actions", [])
+                    if isinstance(action, dict)
+                ],
+                "Aucune action de remediation disponible.",
+            )
+            + "</section>",
+            "</body></html>",
+        ]
+    )
+
+    safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(artifact_id))
+    return html_body, f"rootrap-report-{safe_name}.html"
+
+
+@app.get("/api/reports/{report_id}/download", response_class=HTMLResponse)
+def download_report(report_id: str):
+    reports = load_json(REPORTS_FILE)
+    report = next((item for item in reports if isinstance(item, dict) and item.get("report_id") == report_id), None)
+    report_path = report.get("report_path") if isinstance(report, dict) else None
+    if report_path:
+        path = Path(str(report_path))
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        if path.exists() and path.is_file():
+            return FileResponse(str(path), media_type="text/html", filename=path.name)
+
+    body, filename = build_incident_report_html(report_id)
+    return HTMLResponse(
+        content=body,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/remediation")
 def list_remediation_items():
     artifacts = merge_quarantine_sources(load_json(QUARANTINE_FILE))
@@ -634,19 +782,40 @@ SANDBOX_RESULTS_FILE = os.path.join(DATA_DIR, "sandbox_results.json")
 
 
 class SandboxResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     artifact_id: str
     alert_id: Optional[str] = None
     sandbox_id: Optional[str] = None
     execution_status: str
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
-    processes_created: list = []
-    files_created: list = []
-    files_modified: list = []
-    network_connections: list = []
-    persistence_indicators: list = []
+    analysis_id: Optional[str] = None
+    analysis_started_at: Optional[str] = None
+    analysis_finished_at: Optional[str] = None
+    vm_name: Optional[str] = None
+    snapshot_name: Optional[str] = None
+    artifact_name: Optional[str] = None
+    artifact_sha256: Optional[str] = None
+    exit_code: Optional[int] = None
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    strace_excerpt: Optional[str] = None
+    logs_path: Optional[str] = None
+    stdout_path: Optional[str] = None
+    stderr_path: Optional[str] = None
+    strace_path: Optional[str] = None
+    error_message: Optional[str] = None
+    file_events: dict = Field(default_factory=dict)
+    network_events: list = Field(default_factory=list)
+    observed_processes: list = Field(default_factory=list)
+    processes_created: list = Field(default_factory=list)
+    files_created: list = Field(default_factory=list)
+    files_modified: list = Field(default_factory=list)
+    network_connections: list = Field(default_factory=list)
+    persistence_indicators: list = Field(default_factory=list)
     behavior_summary: Optional[str] = None
-    risk_observations: list = []
+    risk_observations: list = Field(default_factory=list)
 
 
 @app.post("/api/sandbox/results")

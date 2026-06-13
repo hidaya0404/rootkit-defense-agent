@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import html
 import mimetypes
 import os
 import subprocess
@@ -66,6 +67,28 @@ def list_from_payload(payload: dict[str, object] | list[object] | None, *keys: s
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def embedded_sandbox_results(scope: set[str]) -> list[dict[str, object]]:
+    embedded: list[dict[str, object]] = []
+    if not remote_dashboard_data_enabled():
+        return embedded
+
+    for endpoint in ("/api/quarantine", "/api/quarantine/ready"):
+        payload, _ = load_remote_json(f"{configured_m4_backend_url()}{endpoint}", timeout=4.0)
+        for artifact in list_from_payload(payload, "artifacts", "quarantine", "results", "items", "data"):
+            sandbox_result = artifact.get("sandbox_result")
+            if not isinstance(sandbox_result, dict):
+                continue
+            item = dict(sandbox_result)
+            item.setdefault("artifact_id", artifact.get("artifact_id"))
+            item.setdefault("alert_id", artifact.get("alert_id"))
+            item.setdefault("artifact_name", artifact.get("filename") or artifact.get("artifact_name"))
+            item.setdefault("artifact_sha256", artifact.get("sha256"))
+            item.setdefault("quarantine_path", artifact.get("quarantine_path") or artifact.get("stored_path"))
+            if matches_dashboard_scope(item, scope):
+                embedded.append(item)
+    return embedded
 
 
 def runtime_config() -> QuarantineConfig:
@@ -271,6 +294,7 @@ def load_sandbox_results() -> list[dict[str, object]]:
                 "data",
             )
         )
+        remote_items.extend(embedded_sandbox_results(scope))
         remote_items = [item for item in remote_items if matches_dashboard_scope(item, scope)]
 
     results_file = root / "backend" / "data" / "sandbox_results.json"
@@ -327,6 +351,10 @@ def load_reports() -> list[dict[str, object]]:
 
     merged = merge_records(remote_items, local_items, identity_keys=("report_id", "artifact_id", "report_path"))
     if merged:
+        for item in merged:
+            report_id = item.get("report_id")
+            if report_id and not item.get("download_url"):
+                item["download_url"] = f"/api/reports/{report_id}/download"
         return merged
     return synthetic_dashboard_reports()
 
@@ -352,18 +380,21 @@ def synthetic_dashboard_reports() -> list[dict[str, object]]:
     reports = []
     for record in quarantine_records:
         artifact_id = record.get("artifact_id")
+        report_id = f"RPT-{artifact_id}"
         risk_level = record.get("risk_level") or "MEDIUM"
         reports.append(
             {
-                "report_id": f"RPT-{artifact_id}",
+                "report_id": report_id,
                 "artifact_id": artifact_id,
                 "alert_id": record.get("alert_id"),
                 "timestamp": record.get("created_at") or record.get("detected_at"),
                 "risk_score": risk_score_from_level(risk_level),
                 "risk_level": risk_level,
-                "status": "SYNTHETIC_INCIDENT_SUMMARY",
-                "report_path": record.get("manifest_path"),
+                "status": "LOCAL_INCIDENT_REPORT",
+                "summary": "Local incident report generated from alert, quarantine, sandbox and remediation data.",
+                "report_path": None,
                 "pdf_report_path": None,
+                "download_url": f"/api/reports/{report_id}/download",
                 "sandbox_status": sandbox_by_artifact.get(artifact_id, {}).get("execution_status"),
             }
         )
@@ -384,9 +415,11 @@ def _artifact_candidates(config: QuarantineConfig) -> list[str]:
 def load_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
     backend_url = configured_m4_backend_url()
     remediations: list[dict[str, object]] = []
+    remediation_list_missing = False
 
     if remote_dashboard_data_enabled():
-        remote_payload, _ = load_remote_json(f"{backend_url}/api/remediation", timeout=3.0)
+        remote_payload, error = load_remote_json(f"{backend_url}/api/remediation", timeout=3.0)
+        remediation_list_missing = bool(error and ("404" in error or "not found" in error.lower()))
         scope = dashboard_scope_ids(config)
         if isinstance(remote_payload, dict):
             remote_results = remote_payload.get("results") or remote_payload.get("remediations")
@@ -405,15 +438,16 @@ def load_remediations(config: QuarantineConfig) -> list[dict[str, object]]:
             if filtered:
                 return filtered
 
-    for artifact_id in _artifact_candidates(config):
-        payload, error = load_remote_json(f"{backend_url}/api/remediation/{artifact_id}", timeout=2.0)
-        if error or not isinstance(payload, dict):
-            continue
-        remediation = payload.get("remediation") if isinstance(payload.get("remediation"), dict) else payload
-        if isinstance(remediation, dict):
-            item = dict(remediation)
-            item.setdefault("artifact_id", artifact_id)
-            remediations.append(item)
+    if remote_dashboard_data_enabled() and not remediation_list_missing:
+        for artifact_id in _artifact_candidates(config):
+            payload, error = load_remote_json(f"{backend_url}/api/remediation/{artifact_id}", timeout=2.0)
+            if error or not isinstance(payload, dict):
+                continue
+            remediation = payload.get("remediation") if isinstance(payload.get("remediation"), dict) else payload
+            if isinstance(remediation, dict):
+                item = dict(remediation)
+                item.setdefault("artifact_id", artifact_id)
+                remediations.append(item)
 
     if remediations:
         return remediations
@@ -617,7 +651,7 @@ def build_cases(config: QuarantineConfig) -> list[dict[str, object]]:
         has_final_report = bool(
             report
             and "SYNTHETIC" not in report_status_text
-            and not report_path_text.endswith("manifest.json")
+            and (report.get("download_url") or not report_path_text.endswith("manifest.json"))
         )
         if has_final_report:
             report_status = "DONE"
@@ -679,6 +713,176 @@ def build_cases(config: QuarantineConfig) -> list[dict[str, object]]:
         )
 
     return sorted(cases, key=lambda item: str(item.get("last_update") or ""), reverse=True)
+
+
+def _html(value: object) -> str:
+    return html.escape(str(value if value is not None else "-"))
+
+
+def _report_section(title: str, content: str) -> str:
+    return f"<section><h2>{_html(title)}</h2>{content}</section>"
+
+
+def _kv_table(rows: list[tuple[str, object]]) -> str:
+    body = "".join(
+        f"<tr><th>{_html(label)}</th><td>{_html(value)}</td></tr>"
+        for label, value in rows
+    )
+    return f"<table>{body}</table>"
+
+
+def _list_block(items: object, empty: str = "Aucun element observe.") -> str:
+    if not isinstance(items, list) or not items:
+        return f"<p class='muted'>{_html(empty)}</p>"
+    return "<ul>" + "".join(f"<li>{_html(_compact_report_value(item))}</li>" for item in items[:30]) + "</ul>"
+
+
+def _compact_report_value(value: object) -> str:
+    if isinstance(value, dict):
+        for keys in (
+            ("process", "pid", "cmdline"),
+            ("protocol", "remote", "port"),
+            ("path", "action", "sha256"),
+            ("name", "value", "status"),
+        ):
+            parts = [str(value.get(key)) for key in keys if value.get(key) not in (None, "")]
+            if parts:
+                return " | ".join(parts)
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value[:8])
+    return str(value)
+
+
+def build_dashboard_report_html(report_id: str, config: QuarantineConfig) -> tuple[str, str]:
+    artifact_id = report_id[4:] if report_id.startswith("RPT-") else report_id
+    records = load_ui_records(config)
+    alerts = load_dashboard_alerts(config)
+    sandbox_results = load_sandbox_results()
+    remediations = load_remediations(config)
+    cases = build_cases(config)
+
+    record = first_match(records, artifact_id=artifact_id)
+    alert_id = (record or {}).get("alert_id")
+    alert = first_match(alerts, alert_id=alert_id, artifact_id=artifact_id)
+    sandbox = first_match(sandbox_results, alert_id=alert_id, artifact_id=artifact_id)
+    remediation = first_match(remediations, alert_id=alert_id, artifact_id=artifact_id)
+    case = first_match(cases, alert_id=alert_id, artifact_id=artifact_id)
+
+    filename = (
+        (record or {}).get("filename")
+        or (record or {}).get("artifact_name")
+        or (sandbox or {}).get("artifact_name")
+        or artifact_id
+    )
+    status = (case or {}).get("status") or "UNKNOWN"
+    timeline = (case or {}).get("timeline") if isinstance((case or {}).get("timeline"), list) else []
+    timeline_html = "<ol>" + "".join(
+        "<li>"
+        f"<strong>{_html(step.get('label'))}</strong> "
+        f"<span>{_html(step.get('status'))}</span>"
+        f"<p>{_html(step.get('detail'))}</p>"
+        f"<em>{_html(step.get('timestamp'))}</em>"
+        "</li>"
+        for step in timeline
+        if isinstance(step, dict)
+    ) + "</ol>"
+
+    behavior = (sandbox or {}).get("behavior_summary")
+    if isinstance(behavior, dict):
+        behavior_text = json.dumps(behavior, ensure_ascii=False, indent=2)
+    else:
+        behavior_text = str(behavior or "Aucun resume comportemental recu.")
+
+    actions = (remediation or {}).get("actions")
+    action_items = []
+    if isinstance(actions, list):
+        for action in actions[:20]:
+            if isinstance(action, dict):
+                action_items.append(
+                    f"{action.get('step', '-')}. {action.get('title', 'Action')} - "
+                    f"{action.get('action') or action.get('command') or action.get('status')}"
+                )
+
+    content = "\n".join(
+        [
+            "<!doctype html><html lang='fr'><head><meta charset='utf-8'>",
+            f"<title>RootRAP Report - {_html(artifact_id)}</title>",
+            "<style>",
+            "body{font-family:Arial,Helvetica,sans-serif;background:#090909;color:#f3eeee;margin:32px;line-height:1.45}",
+            "h1{color:#ff3b3b}h2{border-bottom:1px solid #602020;padding-bottom:6px;color:#fff}",
+            "section{border:1px solid #3a1717;background:#130b0b;margin:16px 0;padding:16px}",
+            "table{width:100%;border-collapse:collapse}th,td{border:1px solid #3a1717;padding:8px;text-align:left;vertical-align:top}",
+            "th{width:220px;color:#b99}.badge{display:inline-block;border:1px solid #ff3b3b;color:#55ff99;padding:4px 8px}",
+            "pre{white-space:pre-wrap;background:#050505;border:1px solid #3a1717;padding:12px;overflow-wrap:anywhere}",
+            "li{margin:10px 0}.muted,em{color:#ad9999}",
+            "</style></head><body>",
+            f"<h1>RootRAP Incident Report</h1><p><span class='badge'>{_html(status)}</span></p>",
+            _report_section(
+                "Resume executif",
+                _kv_table(
+                    [
+                        ("Report ID", report_id),
+                        ("Artifact ID", artifact_id),
+                        ("Alert ID", alert_id or (alert or {}).get("alert_id")),
+                        ("Fichier", filename),
+                        ("Risque", (record or {}).get("risk_level") or (remediation or {}).get("risk_level")),
+                        ("Statut case", status),
+                        ("Bloque a", (case or {}).get("stopped_at") or "Flux complet"),
+                    ]
+                ),
+            ),
+            _report_section("Timeline", timeline_html or "<p class='muted'>Aucune timeline disponible.</p>"),
+            _report_section(
+                "Quarantaine M2",
+                _kv_table(
+                    [
+                        ("Status", (record or {}).get("status")),
+                        ("Original path", (record or {}).get("original_path")),
+                        ("Quarantine path", (record or {}).get("quarantine_path") or (record or {}).get("artifact_path")),
+                        ("SHA256", (record or {}).get("sha256")),
+                        ("Integrity", (record or {}).get("integrity_verified")),
+                        ("Profile", (record or {}).get("rootkit_category")),
+                    ]
+                ),
+            ),
+            _report_section(
+                "Analyse sandbox M3",
+                _kv_table(
+                    [
+                        ("Execution", (sandbox or {}).get("execution_status") or (sandbox or {}).get("sandbox_status")),
+                        ("VM", (sandbox or {}).get("vm_name") or (sandbox or {}).get("sandbox_id")),
+                        ("Snapshot", (sandbox or {}).get("snapshot_name") or (sandbox or {}).get("snapshot_used")),
+                        ("Exit code", (sandbox or {}).get("exit_code")),
+                        ("Started", (sandbox or {}).get("started_at") or (sandbox or {}).get("analysis_started_at")),
+                        ("Finished", (sandbox or {}).get("finished_at") or (sandbox or {}).get("analysis_finished_at")),
+                    ]
+                )
+                + f"<h3>Resume comportemental</h3><pre>{_html(behavior_text)}</pre>"
+                + "<h3>Processus observes</h3>"
+                + _list_block((sandbox or {}).get("observed_processes") or (sandbox or {}).get("processes_created"))
+                + "<h3>Connexions reseau</h3>"
+                + _list_block((sandbox or {}).get("network_events") or (sandbox or {}).get("network_connections"))
+                + "<h3>Fichiers crees/modifies</h3>"
+                + _list_block(((sandbox or {}).get("files_created") or []) + ((sandbox or {}).get("files_modified") or [])),
+            ),
+            _report_section(
+                "Remediation",
+                _kv_table(
+                    [
+                        ("Decision", (remediation or {}).get("decision")),
+                        ("Risk score", (remediation or {}).get("risk_score")),
+                        ("Human validation", (remediation or {}).get("requires_human_validation")),
+                    ]
+                )
+                + _list_block(action_items, "Aucune action de remediation disponible."),
+            ),
+            "</body></html>",
+        ]
+    )
+
+    safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(artifact_id))
+    return content, f"rootrap-report-{safe_name}.html"
 
 
 def configured_m4_backend_url() -> str:
@@ -884,6 +1088,11 @@ def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequ
             if parsed.path == "/api/reports":
                 self._json({"count": len(load_reports()), "reports": load_reports()})
                 return
+            if parsed.path.startswith("/api/reports/"):
+                if self._reports_api(parsed.path, config):
+                    return
+                self._not_found()
+                return
             if parsed.path == "/api/remediation":
                 remediations = load_remediations(config)
                 self._json({"count": len(remediations), "remediations": remediations})
@@ -990,6 +1199,23 @@ def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequ
                 return True
 
             return False
+
+        def _reports_api(self, path: str, config: QuarantineConfig) -> bool:
+            parts = [part for part in path.split("/") if part]
+            if len(parts) != 4 or parts[0] != "api" or parts[1] != "reports" or parts[3] != "download":
+                return False
+
+            report_id = unquote(parts[2])
+            body, filename = build_dashboard_report_html(report_id, config)
+            encoded = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(encoded)
+            return True
 
         def _not_found(self) -> None:
             body = b"Not found"

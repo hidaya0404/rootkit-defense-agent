@@ -152,6 +152,99 @@ function matchingCases() {
   return state.cases.filter(queryMatches);
 }
 
+function sameArtifact(left, right) {
+  const leftIds = [left?.artifact_id, left?.alert_id, left?.details?.m2_artifact_id].filter(Boolean).map(String);
+  const rightIds = [right?.artifact_id, right?.alert_id, right?.details?.m2_artifact_id].filter(Boolean).map(String);
+  return leftIds.some((value) => rightIds.includes(value));
+}
+
+function sandboxDisplayItems() {
+  const results = state.sandbox.filter(queryMatches);
+  const placeholders = state.quarantine
+    .filter((record) => queryMatches(record))
+    .filter((record) => record.ready_for_sandbox === true)
+    .filter((record) => !results.some((result) => sameArtifact(result, record)))
+    .map((record) => ({
+      artifact_id: record.artifact_id,
+      alert_id: record.alert_id,
+      artifact_name: artifactName(record),
+      execution_status: "WAITING_M4_RESULT",
+      sandbox_status: "WAITING_M4_RESULT",
+      behavior_summary: "Artefact pret pour sandbox, mais aucun resultat sandbox correspondant n'est encore visible dans M4.",
+      quarantine_path: record.quarantine_path || record.artifact_path,
+      artifact_sha256: record.sha256,
+      _placeholder: true
+    }));
+  return [...results, ...placeholders];
+}
+
+function listCount(value) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function asList(...values) {
+  for (const value of values) {
+    if (Array.isArray(value) && value.length) return value;
+  }
+  return [];
+}
+
+function fileEventList(fileEvents, key) {
+  if (!fileEvents) return [];
+  if (Array.isArray(fileEvents)) return fileEvents;
+  if (Array.isArray(fileEvents[key])) return fileEvents[key];
+  return [];
+}
+
+function readableEvent(item) {
+  if (item === null || item === undefined || item === "") return "-";
+  if (typeof item === "string") return item;
+  if (typeof item === "number" || typeof item === "boolean") return String(item);
+  if (typeof item === "object") {
+    const preferred = [
+      ["process", "pid", "cmdline"],
+      ["pid", "name", "cmdline"],
+      ["protocol", "local", "remote", "port"],
+      ["remote_addr", "remote_port", "protocol"],
+      ["path", "action", "sha256"],
+      ["filename", "path", "status"],
+      ["name", "value", "status"]
+    ];
+    for (const keys of preferred) {
+      const parts = keys
+        .map((key) => item[key])
+        .filter((value) => value !== undefined && value !== null && value !== "");
+      if (parts.length) return parts.map(String).join(" | ");
+    }
+    return JSON.stringify(item, null, 2);
+  }
+  return String(item);
+}
+
+function behaviorText(result) {
+  const behavior = result?.behavior_summary;
+  if (result?._placeholder) {
+    return "Pret pour M3. Le dashboard attend encore un resultat sandbox stocke dans M4 avec le meme artifact_id.";
+  }
+  if (!behavior) {
+    const files = asList(result?.files_created, result?.file_events?.created).length
+      + asList(result?.files_modified, result?.file_events?.modified).length;
+    const networks = asList(result?.network_events, result?.network_connections).length;
+    const processes = asList(result?.observed_processes, result?.processes_created, result?.processes).length;
+    if (files || networks || processes) {
+      return `Analyse terminee: ${processes} processus observes, ${files} evenement(s) fichier, ${networks} connexion(s) reseau.`;
+    }
+    return "Analyse recue, aucun comportement suspect detaille n'a ete rapporte.";
+  }
+  if (typeof behavior === "string") return behavior;
+  return JSON.stringify(behavior, null, 2);
+}
+
+function compactList(items, limit = 8) {
+  if (!Array.isArray(items) || !items.length) return [];
+  return items.slice(0, limit);
+}
+
 function setDonut(id, value, total, offset) {
   const circle = $(id);
   if (!circle) return offset;
@@ -475,28 +568,102 @@ function renderQuarantineDetail(record) {
 }
 
 function renderSandbox() {
-  const items = state.sandbox.filter(queryMatches);
-  $("#sandbox-grid").innerHTML = items.map((result) => {
+  const items = sandboxDisplayItems();
+  $("#sandbox-grid").innerHTML = items.map((result, index) => {
     const status = result.execution_status || result.sandbox_status || "UNKNOWN";
     const fileEvents = result.file_events || {};
-    const files = (fileEvents.created?.length || 0) + (fileEvents.modified?.length || 0) + (result.files_created?.length || 0);
-    const networks = (result.network_events || result.network_connections || []).length;
+    const files = fileEventList(fileEvents, "created").length + fileEventList(fileEvents, "modified").length + listCount(result.files_created) + listCount(result.files_modified);
+    const networks = asList(result.network_events, result.network_connections).length;
+    const processes = asList(result.observed_processes, result.processes_created, result.processes).length;
     return `
-      <article class="sandbox-card">
+      <article class="sandbox-card ${result._placeholder ? "waiting" : ""}" data-sandbox-index="${index}">
         <header>
           <strong>${escapeHtml(result.analysis_id || result.artifact_id || "analysis")}</strong>
           <span class="badge ${severityClass(status)}">${escapeHtml(status)}</span>
         </header>
         <div class="artifact-line"><span>artifact</span><strong class="mono">${escapeHtml(result.artifact_id || "-")}</strong></div>
         <div class="artifact-line"><span>vm</span><strong>${escapeHtml(result.vm_name || result.sandbox_vm || result.sandbox_id || "-")}</strong></div>
-        <div class="artifact-line"><span>snapshot</span><strong>${escapeHtml(result.snapshot_name || result.snapshot_used || "-")}</strong></div>
+        <div class="artifact-line"><span>summary</span><strong>${escapeHtml(behaviorText(result).slice(0, 92))}</strong></div>
         <div class="artifact-line"><span>exit</span><strong>${escapeHtml(valueOrDash(result.exit_code))}</strong></div>
+        <div class="artifact-line"><span>process</span><strong>${processes}</strong></div>
         <div class="artifact-line"><span>files</span><strong>${files}</strong></div>
         <div class="artifact-line"><span>network</span><strong>${networks}</strong></div>
-        <small>${escapeHtml(result.logs_path || result.local_result_path || "")}</small>
+        <small>${escapeHtml(result.finished_at || result.analysis_finished_at || result.received_at || "")}</small>
       </article>
     `;
   }).join("") || `<div class="empty-state"><strong>Aucune analyse sandbox</strong><span>isolated runtime</span></div>`;
+
+  $$("#sandbox-grid .sandbox-card[data-sandbox-index]").forEach((card) => {
+    card.addEventListener("click", () => {
+      $$("#sandbox-grid .sandbox-card").forEach((item) => item.classList.remove("selected"));
+      card.classList.add("selected");
+      renderSandboxDetail(items[Number(card.dataset.sandboxIndex)]);
+    });
+  });
+  renderSandboxDetail(items[0]);
+}
+
+function renderSandboxDetail(result) {
+  const panel = $("#sandbox-detail");
+  if (!panel) return;
+  if (!result) {
+    panel.innerHTML = emptyState("Selectionner une analyse", "sandbox behavior");
+    return;
+  }
+
+  const status = result.execution_status || result.sandbox_status || "UNKNOWN";
+  const processes = compactList(asList(result.observed_processes, result.processes_created, result.processes), 12);
+  const networks = compactList(asList(result.network_events, result.network_connections), 12);
+  const created = compactList(asList(result.files_created, fileEventList(result.file_events, "created")), 12);
+  const modified = compactList(asList(result.files_modified, fileEventList(result.file_events, "modified")), 12);
+  const risks = compactList(asList(result.risk_observations), 12);
+  const stdout = result.stdout ? String(result.stdout).slice(0, 1200) : "";
+  const stderr = result.stderr ? String(result.stderr).slice(0, 1200) : "";
+  const strace = result.strace_excerpt ? String(result.strace_excerpt).slice(0, 1800) : "";
+  const explanation = result._placeholder
+    ? "M3 n'a pas encore un resultat confirme dans M4 pour cet artifact_id. Si Asma voit 'deja traite', elle doit supprimer sandbox/processed_artifacts.json ou relancer le worker apres git pull."
+    : behaviorText(result);
+
+  panel.innerHTML = `
+    <div class="detail-stack">
+      <div class="detail-title">
+        <strong>${escapeHtml(result.artifact_id || result.analysis_id || "sandbox")}</strong>
+        <span>${escapeHtml(result.artifact_name || result.filename || "Analyse comportementale")}</span>
+      </div>
+      ${detailRow("status", status)}
+      ${detailRow("interpretation", explanation, true)}
+      ${detailRow("vm", result.vm_name || result.sandbox_vm || result.sandbox_id)}
+      ${detailRow("snapshot", result.snapshot_name || result.snapshot_used)}
+      ${detailRow("exit code", valueOrDash(result.exit_code))}
+      ${detailRow("started", result.started_at || result.analysis_started_at)}
+      ${detailRow("finished", result.finished_at || result.analysis_finished_at || result.received_at)}
+      ${detailRow("sha256", result.artifact_sha256, true)}
+      <div class="sandbox-detail-grid">
+        <article><span>processes</span><strong>${processes.length}</strong></article>
+        <article><span>files created</span><strong>${created.length}</strong></article>
+        <article><span>files modified</span><strong>${modified.length}</strong></article>
+        <article><span>network</span><strong>${networks.length}</strong></article>
+      </div>
+      ${sandboxListBlock("Risk observations", risks)}
+      ${sandboxListBlock("Network connections", networks)}
+      ${sandboxListBlock("Observed processes", processes)}
+      ${sandboxListBlock("Files created", created)}
+      ${sandboxListBlock("Files modified", modified)}
+      ${stdout ? detailRow("stdout", stdout, true) : ""}
+      ${stderr ? detailRow("stderr", stderr, true) : ""}
+      ${strace ? detailRow("strace excerpt", strace, true) : ""}
+      ${detailRow("logs path", result.logs_path || result.local_result_path, true)}
+    </div>
+  `;
+}
+
+function sandboxListBlock(title, items) {
+  return `
+    <div class="sandbox-list-block">
+      <span>${escapeHtml(title)}</span>
+      ${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(readableEvent(item))}</li>`).join("")}</ul>` : `<p>Aucun element observe.</p>`}
+    </div>
+  `;
 }
 
 function renderIocs() {
@@ -541,11 +708,18 @@ function renderReports() {
       <td class="mono">${escapeHtml(report.report_id || report.alert_id || "-")}</td>
       <td class="mono">${escapeHtml(report.artifact_id || "-")}</td>
       <td>${escapeHtml(report.timestamp || report.created_at || "-")}</td>
-      <td>${report.report_path ? `<span class="badge ready">HTML</span>` : "-"}</td>
+      <td>${
+        report.download_url
+          ? `<button class="action-button primary" type="button" data-open="${escapeHtml(report.download_url)}">download</button>`
+          : report.report_path
+            ? `<span class="badge ready">HTML</span>`
+            : "-"
+      }</td>
       <td>${report.pdf_report_path ? `<span class="badge info">PDF</span>` : "-"}</td>
     </tr>
   `);
   $("#reports-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucun rapport</td></tr>`;
+  bindOpenButtons($("#reports-table"));
 }
 
 function renderRemediation() {
