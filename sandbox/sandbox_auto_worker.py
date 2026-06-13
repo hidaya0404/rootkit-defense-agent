@@ -16,7 +16,7 @@ except ImportError:
     CONFIG_BACKEND_URL = ""
 
 
-CURRENT_M4_BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
+CURRENT_M4_BACKEND_URL = "https://disclose-fired-boating-findings.trycloudflare.com"
 READY_ENDPOINT = "/api/quarantine/ready"
 PROCESSED_FILE = Path("sandbox/processed_artifacts.json")
 DOWNLOAD_DIR = Path("sandbox/downloaded_artifacts")

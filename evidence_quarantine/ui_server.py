@@ -17,7 +17,7 @@ from evidence_quarantine.config import QuarantineConfig
 from evidence_quarantine.quarantine_manager import QuarantineManager
 from evidence_quarantine.storage import read_json
 
-DEFAULT_M4_BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
+DEFAULT_M4_BACKEND_URL = "https://disclose-fired-boating-findings.trycloudflare.com"
 
 
 def rootrap_storage_root() -> Path | None:

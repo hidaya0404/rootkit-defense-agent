@@ -25,7 +25,7 @@ from sandbox_config import (
     LOCAL_RESULTS_DIR,
 )
 
-CURRENT_M4_BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
+CURRENT_M4_BACKEND_URL = "https://disclose-fired-boating-findings.trycloudflare.com"
 
 
 # ============================================================

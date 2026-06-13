@@ -10,7 +10,7 @@ GUEST_IP = "192.168.56.111"
 
 REMOTE_WORKDIR = "/home/asma/sandbox_run"
 
-BACKEND_URL = "https://sheet-different-operation-mature.trycloudflare.com"
+BACKEND_URL = "https://disclose-fired-boating-findings.trycloudflare.com"
 QUARANTINE_ENDPOINT = "/api/quarantine"
 SANDBOX_RESULT_ENDPOINT = "/api/sandbox/results"
 
