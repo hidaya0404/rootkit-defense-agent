@@ -60,7 +60,7 @@ def is_duplicate(alert: dict) -> bool:
     return False
 
 
-def send_alert(alert):
+def _send_alert_legacy(alert):
     if is_duplicate(alert):
         return  # Supprime les doublons dans la fenêtre de cooldown
 
@@ -85,6 +85,32 @@ def send_alert(alert):
         print(f"[BACKEND] warning: {exc}")
 
 
+def send_alert(alert):
+    if is_duplicate(alert):
+        return False
+
+    print(f"[ALERT] {alert['severity']} - {alert['type']} | {alert.get('description', '')}")
+    logging.info("Alert: %s - %s | %s", alert["type"], alert["severity"], alert.get("description"))
+
+    if alert.get("details", {}).get("needs_quarantine"):
+        file_path = alert["details"].get("path")
+        if file_path and os.path.isfile(file_path):
+            quarantine_path = quarantine_file(file_path, alert["alert_id"])
+            if quarantine_path:
+                alert["details"]["quarantine_path"] = quarantine_path
+
+    with open(CONFIG["pending_alerts_file"], "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(alert) + "\n")
+
+    try:
+        url = CONFIG["backend_url"] + CONFIG["alert_endpoint"]
+        requests.post(url, json=alert, timeout=5)
+        print("[BACKEND] sent")
+    except Exception as exc:
+        print(f"[BACKEND] warning: {exc}")
+    return True
+
+
 def run_scans():
     cycle = 0
     while True:
@@ -100,8 +126,7 @@ def run_scans():
 
         sent = 0
         for alert in all_alerts:
-            if not is_duplicate(alert):
-                send_alert(alert)
+            if send_alert(alert):
                 sent += 1
 
         print(f"[SCAN] Cycle {cycle} finished — {len(all_alerts)} détectées, {sent} nouvelles envoyées")
