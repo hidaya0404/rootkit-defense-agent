@@ -3,6 +3,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
+
 def build_alert(module, severity, alert_type, description, details):
     return {
         "alert_id": str(uuid.uuid4()),
@@ -15,6 +16,7 @@ def build_alert(module, severity, alert_type, description, details):
         "status": "NEW"
     }
 
+
 def get_proc_pids():
     pids = set()
     for entry in os.listdir('/proc'):
@@ -22,14 +24,19 @@ def get_proc_pids():
             pids.add(int(entry))
     return pids
 
+
 def get_psutil_pids():
     return set(p.pid for p in psutil.process_iter())
 
+
 def scan_processes():
     alerts = []
+
+    # --- Processus cachés ---
     hidden = get_proc_pids() - get_psutil_pids()
     for pid in hidden:
-      try:
+        # Tenter de lire les infos depuis /proc directement
+        try:
             with open(f"/proc/{pid}/cmdline", "rb") as f:
                 cmdline = f.read().replace(b'\x00', b' ').decode(errors='replace').strip()
         except Exception:
@@ -47,10 +54,12 @@ def scan_processes():
             }
         ))
 
-    for proc in psutil.process_iter(['pid', 'name', 'exe', 'username']):
+    # --- Processus depuis répertoires suspects ---
+    for proc in psutil.process_iter(['pid', 'name', 'exe', 'username', 'cmdline', 'ppid', 'create_time']):
         try:
             exe = proc.info['exe'] or ''
             if any(exe.startswith(d) for d in ['/tmp', '/dev/shm', '/var/tmp']):
+                # Récupérer le nom du processus parent
                 try:
                     parent = psutil.Process(proc.info['ppid'])
                     parent_name = parent.name()
@@ -80,3 +89,4 @@ def scan_processes():
             pass
 
     return alerts
+
