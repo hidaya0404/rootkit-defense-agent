@@ -6,6 +6,7 @@ import mimetypes
 import os
 import subprocess
 import webbrowser
+import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -896,9 +897,19 @@ def build_dashboard_report_html(report_id: str, config: QuarantineConfig) -> tup
             "table{width:100%;border-collapse:collapse}th,td{border:1px solid #3a1717;padding:8px;text-align:left;vertical-align:top}",
             "th{width:220px;color:#b99}.badge{display:inline-block;border:1px solid #ff3b3b;color:#55ff99;padding:4px 8px}",
             "pre{white-space:pre-wrap;background:#050505;border:1px solid #3a1717;padding:12px;overflow-wrap:anywhere}",
+            ".hero{border:1px solid #ff3b3b;background:#130707;padding:18px;margin-bottom:16px}.hero strong{color:#55ff99}",
+            ".riskbar{height:10px;background:#1b1b1b;border:1px solid #3a1717}.riskbar span{display:block;height:100%;background:linear-gradient(90deg,#38e07b,#f5c451,#ff3b3b)}",
             "li{margin:10px 0}.muted,em{color:#ad9999}",
             "</style></head><body>",
-            f"<h1>RootRAP Incident Report</h1><p><span class='badge'>{_html(status)}</span></p>",
+            f"<h1>RootRAP Incident Report</h1>",
+            "<div class='hero'>"
+            f"<p><span class='badge'>{_html(status)}</span></p>"
+            f"<p><strong>Artefact :</strong> {_html(filename)}</p>"
+            f"<p><strong>SHA256 :</strong> {_html((record or {}).get('sha256'))}</p>"
+            f"<p><strong>Decision :</strong> {_html((remediation or {}).get('decision') or 'Investigation prioritaire')}</p>"
+            f"<p><strong>Risk score :</strong> {_html((remediation or {}).get('risk_score') or (record or {}).get('risk_score') or risk_score_from_level((record or {}).get('risk_level')))} / 100</p>"
+            f"<div class='riskbar'><span style='width:{min(100, max(0, int((remediation or {}).get('risk_score') or (record or {}).get('risk_score') or risk_score_from_level((record or {}).get('risk_level')))))}%'></span></div>"
+            "</div>",
             _report_section(
                 "Resume executif",
                 _kv_table(
@@ -1256,6 +1267,24 @@ def create_handler(config: QuarantineConfig, web_dir: Path) -> type[BaseHTTPRequ
                         "sha256": record.get("sha256"),
                         "download_url": f"/api/quarantine/{alert_id}/download",
                         "handoff_status": "READY_FOR_SANDBOX",
+                    }
+                )
+                return True
+
+            if action == "retry":
+                record = dict(record)
+                record["status"] = "READY_FOR_ANALYSIS"
+                record["ready_for_sandbox"] = True
+                record["sandbox_status"] = "RETRY_REQUESTED"
+                record["retry_requested_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                manager.repository.upsert(record)
+                self._json(
+                    {
+                        "message": "Sandbox retry requested",
+                        "alert_id": alert_id,
+                        "artifact_id": record.get("artifact_id"),
+                        "status": record.get("status"),
+                        "ready_for_sandbox": record.get("ready_for_sandbox"),
                     }
                 )
                 return True

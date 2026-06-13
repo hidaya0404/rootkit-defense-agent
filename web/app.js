@@ -7,6 +7,10 @@ const state = {
   cases: [],
   activeView: "dashboard",
   quarantineFilter: "ALL",
+  statusFilter: "ALL",
+  riskFilter: "ALL",
+  memberFilter: "ALL",
+  typeFilter: "ALL",
   query: "",
   connectionErrors: {},
   refreshInFlight: false
@@ -79,12 +83,96 @@ function severityClass(value) {
   return "info";
 }
 
+function statusDisplay(status) {
+  const raw = String(status || "UNKNOWN").toUpperCase();
+  if (raw.includes("SHA256") || raw.includes("INTEGRITY")) {
+    return { label: "SHA256_INVALID", className: "invalid", message: "L'artefact telecharge ne correspond pas au hash annonce. Analyse bloquee pour raison d'integrite." };
+  }
+  if (raw.includes("DOWNLOAD")) {
+    return { label: "DOWNLOAD_FAILED", className: "critical", message: "Le lien de telechargement fourni par M4 est invalide ou inaccessible." };
+  }
+  if (raw.includes("WAITING_M4_RESULT")) {
+    return { label: "WAITING_M3_ANALYSIS", className: "waiting", message: "Artefact pret, en attente d'un resultat M3 visible dans M4 avec le meme identifiant ou le meme hash." };
+  }
+  if (raw.includes("RUNNING") || raw.includes("IN_PROGRESS")) {
+    return { label: "SANDBOX_RUNNING", className: "info", message: "Analyse sandbox en cours." };
+  }
+  if (raw.includes("COMPLETED") || raw.includes("DONE") || raw.includes("RESULT_RECEIVED")) {
+    return { label: "SANDBOX_COMPLETED", className: "ready", message: "Analyse terminee et resultat disponible." };
+  }
+  if (raw.includes("FAILED") || raw.includes("ERROR") || raw.includes("TIMEOUT") || raw.includes("REJECTED")) {
+    return { label: "SANDBOX_FAILED", className: "critical", message: "Analyse echouee ou bloquee. Verifie les details techniques." };
+  }
+  if (raw.includes("READY")) {
+    return { label: "READY_FOR_ANALYSIS", className: "medium", message: "Artefact pret pour etre pris par le worker M3." };
+  }
+  if (raw.includes("SENT")) {
+    return { label: "RESULT_SENT_TO_M4", className: "ready", message: "Resultat envoye a M4." };
+  }
+  return { label: raw, className: severityClass(raw), message: raw };
+}
+
+function statusBadge(status) {
+  const display = statusDisplay(status);
+  return `<span class="badge ${display.className}" title="${escapeHtml(display.message)}">${escapeHtml(display.label)}</span>`;
+}
+
 function recordText(record) {
   return JSON.stringify(record || {}).toLowerCase();
 }
 
+function recordStatus(record) {
+  return String(
+    record?.status
+      || record?.execution_status
+      || record?.sandbox_status
+      || record?.risk_level
+      || record?.severity
+      || ""
+  ).toUpperCase();
+}
+
+function recordRisk(record) {
+  return String(record?.risk_level || record?.severity || record?.ai_recommendation?.risk_level || "").toUpperCase();
+}
+
+function recordMember(record) {
+  const text = recordText(record);
+  if (text.includes("sandbox") || text.includes("m3") || text.includes("vmware")) return "M3";
+  if (text.includes("quarantine") || text.includes("m2") || text.includes("evidence")) return "M2";
+  if (text.includes("remediation") || text.includes("report") || text.includes("m4") || text.includes("yara")) return "M4";
+  if (text.includes("agent") || text.includes("monitor") || text.includes("m1")) return "M1";
+  return "ALL";
+}
+
+function recordType(record) {
+  const name = String(record?.filename || record?.artifact_name || record?.original_path || record?.quarantine_path || "").toLowerCase();
+  if (name.endsWith(".sh")) return ".sh";
+  if (name.endsWith(".ko")) return ".ko";
+  if (name.endsWith(".service")) return ".service";
+  if (name.endsWith(".json") || name.includes("json")) return "json";
+  return "ALL";
+}
+
+function advancedFiltersMatch(record) {
+  const status = recordStatus(record);
+  const risk = recordRisk(record);
+  const member = recordMember(record);
+  const type = recordType(record);
+  const statusOk = state.statusFilter === "ALL"
+    || status.includes(state.statusFilter)
+    || (state.statusFilter === "READY" && status.includes("READY"))
+    || (state.statusFilter === "WAITING" && (status.includes("WAIT") || status.includes("PENDING") || status.includes("PROGRESS")))
+    || (state.statusFilter === "COMPLETED" && (status.includes("DONE") || status.includes("COMPLETED") || status.includes("RESULT_RECEIVED")))
+    || (state.statusFilter === "FAILED" && (status.includes("FAIL") || status.includes("INVALID") || status.includes("REJECT")));
+  const riskOk = state.riskFilter === "ALL" || risk.includes(state.riskFilter);
+  const memberOk = state.memberFilter === "ALL" || member === state.memberFilter || recordText(record).includes(state.memberFilter.toLowerCase());
+  const typeOk = state.typeFilter === "ALL" || type === state.typeFilter || recordText(record).includes(state.typeFilter.toLowerCase());
+  return statusOk && riskOk && memberOk && typeOk;
+}
+
 function queryMatches(record) {
-  return !state.query || recordText(record).includes(state.query);
+  return (!state.query || recordText(record).includes(state.query)) && advancedFiltersMatch(record);
 }
 
 function artifactName(record) {
@@ -301,6 +389,39 @@ function compactList(items, limit = 8) {
   return items.slice(0, limit);
 }
 
+function splitNetworkEvents(items) {
+  const management = [];
+  const suspicious = [];
+  for (const item of items || []) {
+    const text = readableEvent(item).toLowerCase();
+    if (text.includes(":22") || text.includes(" ssh") || text.includes(" port 22") || text.includes("22 ")) {
+      management.push(item);
+    } else {
+      suspicious.push(item);
+    }
+  }
+  return { management, suspicious };
+}
+
+function riskScoreBand(score) {
+  const value = Number(score || 0);
+  if (value >= 81) return { label: "CRITICAL", className: "critical" };
+  if (value >= 61) return { label: "HIGH", className: "high" };
+  if (value >= 31) return { label: "MEDIUM", className: "medium" };
+  return { label: "LOW", className: "low" };
+}
+
+function riskBar(score, level) {
+  const value = Math.max(0, Math.min(Number(score || 0), 100));
+  const band = riskScoreBand(value || (String(level).toUpperCase() === "HIGH" ? 78 : 20));
+  return `
+    <div class="risk-visual ${band.className}">
+      <div><span>Risk score</span><strong>${value || "-"}/100 ${escapeHtml(level || band.label)}</strong></div>
+      <div class="score-bar"><span style="width:${value}%"></span></div>
+    </div>
+  `;
+}
+
 function setDonut(id, value, total, offset) {
   const circle = $(id);
   if (!circle) return offset;
@@ -350,7 +471,21 @@ function renderThreatSummary() {
         <strong>${count}</strong>
       </div>
     `);
-  $("#threat-types").innerHTML = rows.join("") || `<div class="type-row"><span>NO DATA</span><strong>0</strong></div>`;
+  const sandboxDone = state.sandbox.filter((item) => statusDisplay(item.execution_status || item.sandbox_status).label === "SANDBOX_COMPLETED").length;
+  const sandboxFailed = state.sandbox.filter((item) => severityClass(item.execution_status || item.sandbox_status) === "critical").length;
+  const generatedReports = state.reports.length;
+  const averageRisk = counts.critical ? "CRITICAL" : counts.high ? "HIGH" : counts.medium ? "MEDIUM" : "LOW";
+  const globalStats = `
+    <div class="global-stats">
+      <article><span>Alertes totales</span><strong>${state.alerts.length}</strong></article>
+      <article><span>Quarantaine</span><strong>${state.quarantine.length}</strong></article>
+      <article><span>Sandbox terminees</span><strong>${sandboxDone}</strong></article>
+      <article><span>Sandbox echouees</span><strong>${sandboxFailed}</strong></article>
+      <article><span>Rapports</span><strong>${generatedReports}</strong></article>
+      <article><span>Risque moyen</span><strong>${averageRisk}</strong></article>
+    </div>
+  `;
+  $("#threat-types").innerHTML = (rows.join("") || `<div class="type-row"><span>NO DATA</span><strong>0</strong></div>`) + globalStats;
 }
 
 function renderNetworkMap() {
@@ -478,8 +613,8 @@ function renderAlerts() {
       <td class="mono">${escapeHtml(alert.alert_id)}</td>
       <td>${escapeHtml(alert.source_module)}</td>
       <td>${escapeHtml(alert.type)}</td>
-      <td><span class="badge ${severityClass(alert.severity)}">${escapeHtml(alert.severity)}</span></td>
-      <td><span class="badge ${severityClass(alert.status)}">${escapeHtml(alert.status || "NEW")}</span></td>
+      <td>${statusBadge(alert.severity)}</td>
+      <td>${statusBadge(alert.status || "NEW")}</td>
     </tr>
   `);
   $("#alerts-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucune alerte</td></tr>`;
@@ -512,6 +647,7 @@ function renderAlertDetail(alert) {
       ${detailRow("details", JSON.stringify(alert.details || {}, null, 2), true)}
     </div>
   `;
+  bindCopyButtons(panel);
 }
 
 function renderCases() {
@@ -521,7 +657,7 @@ function renderCases() {
       <td class="mono">${escapeHtml(item.case_id || "-")}</td>
       <td class="mono">${escapeHtml(item.alert_id || "-")}</td>
       <td class="mono">${escapeHtml(item.artifact_id || item.filename || "-")}</td>
-      <td><span class="badge ${severityClass(item.status)}">${escapeHtml(item.status || "-")}</span></td>
+      <td>${statusBadge(item.status || "-")}</td>
       <td>${escapeHtml(item.stopped_at || "flux complet")}</td>
     </tr>
   `);
@@ -557,8 +693,8 @@ function renderCaseDetail(item) {
         ${timeline.map((step) => `
           <article class="case-stage ${severityClass(step.status)}">
             <div>
-              <span>${escapeHtml(step.label || step.id)}</span>
-              <strong>${escapeHtml(step.status || "-")}</strong>
+              <span><b>${escapeHtml(stageToken(step.status))}</b>${escapeHtml(step.label || step.id)}</span>
+              ${statusBadge(step.status || "-")}
             </div>
             <p>${escapeHtml(step.detail || "-")}</p>
             <em>${escapeHtml(step.timestamp || "")}</em>
@@ -567,6 +703,15 @@ function renderCaseDetail(item) {
       </div>
     </div>
   `;
+  bindCopyButtons(panel);
+}
+
+function stageToken(status) {
+  const normalized = String(status || "").toUpperCase();
+  if (normalized === "DONE" || normalized === "COMPLETED") return "OK";
+  if (normalized.includes("WAIT") || normalized.includes("PENDING") || normalized.includes("PROGRESS")) return "WAIT";
+  if (normalized.includes("FAIL") || normalized.includes("BLOCK")) return "FAIL";
+  return "INFO";
 }
 
 function renderQuarantine() {
@@ -576,7 +721,7 @@ function renderQuarantine() {
       <td>${escapeHtml(artifactName(record))}</td>
       <td>${escapeHtml(record.rootkit_category || "unclassified")}</td>
       <td class="hash mono" title="${escapeHtml(record.sha256 || "")}">${escapeHtml(shortHash(record.sha256))}</td>
-      <td><span class="badge ${severityClass(record.status)}">${escapeHtml(record.status || "-")}</span></td>
+      <td>${statusBadge(record.status || "-")}</td>
     </tr>
   `);
   $("#quarantine-table").innerHTML = rows.join("") || `<tr><td class="empty-row" colspan="5">Aucune preuve</td></tr>`;
@@ -599,6 +744,7 @@ function renderQuarantineDetail(record) {
   const manifestUrl = `/api/quarantine/${encodeURIComponent(record.alert_id)}/manifest`;
   const downloadUrl = `/api/quarantine/${encodeURIComponent(record.alert_id)}/download`;
   const handoffUrl = `/api/quarantine/${encodeURIComponent(record.alert_id)}/handoff`;
+  const retryUrl = `/api/quarantine/${encodeURIComponent(record.alert_id)}/retry`;
   panel.innerHTML = `
     <div class="detail-stack">
       <div class="detail-title">
@@ -617,10 +763,13 @@ function renderQuarantineDetail(record) {
         <button class="action-button primary" type="button" data-open="${manifestUrl}">manifest</button>
         <button class="action-button" type="button" data-open="${downloadUrl}" ${record.ready_for_sandbox ? "" : "disabled"}>download</button>
         <button class="action-button" type="button" data-open="${handoffUrl}" ${record.ready_for_sandbox ? "" : "disabled"}>handoff</button>
+        <button class="action-button" type="button" data-post="${retryUrl}">relancer sandbox</button>
       </div>
     </div>
   `;
   bindOpenButtons(panel);
+  bindPostButtons(panel);
+  bindCopyButtons(panel);
 }
 
 function renderSandbox() {
@@ -629,13 +778,14 @@ function renderSandbox() {
     const status = result.execution_status || result.sandbox_status || "UNKNOWN";
     const fileEvents = result.file_events || {};
     const files = fileEventList(fileEvents, "created").length + fileEventList(fileEvents, "modified").length + listCount(result.files_created) + listCount(result.files_modified);
-    const networks = asList(result.network_events, result.network_connections).length;
+    const networkSplit = splitNetworkEvents(asList(result.network_events, result.network_connections));
+    const networks = networkSplit.suspicious.length;
     const processes = asList(result.observed_processes, result.processes_created, result.processes).length;
     return `
       <article class="sandbox-card ${result._placeholder ? "waiting" : ""}" data-sandbox-index="${index}">
         <header>
           <strong>${escapeHtml(result.analysis_id || result.artifact_id || "analysis")}</strong>
-          <span class="badge ${severityClass(status)}">${escapeHtml(status)}</span>
+          ${statusBadge(status)}
         </header>
         <div class="artifact-line"><span>artifact</span><strong class="mono">${escapeHtml(result.artifact_id || "-")}</strong></div>
         <div class="artifact-line"><span>vm</span><strong>${escapeHtml(result.vm_name || result.sandbox_vm || result.sandbox_id || "-")}</strong></div>
@@ -643,7 +793,7 @@ function renderSandbox() {
         <div class="artifact-line"><span>exit</span><strong>${escapeHtml(valueOrDash(result.exit_code))}</strong></div>
         <div class="artifact-line"><span>process</span><strong>${processes}</strong></div>
         <div class="artifact-line"><span>files</span><strong>${files}</strong></div>
-        <div class="artifact-line"><span>network</span><strong>${networks}</strong></div>
+        <div class="artifact-line"><span>network suspect</span><strong>${networks}</strong></div>
         <small>${escapeHtml(result.finished_at || result.analysis_finished_at || result.received_at || "")}</small>
       </article>
     `;
@@ -669,16 +819,21 @@ function renderSandboxDetail(result) {
 
   const status = result.execution_status || result.sandbox_status || "UNKNOWN";
   const processes = compactList(asList(result.observed_processes, result.processes_created, result.processes), 12);
-  const networks = compactList(asList(result.network_events, result.network_connections), 12);
+  const networkSplit = splitNetworkEvents(asList(result.network_events, result.network_connections));
+  const managementNetworks = compactList(networkSplit.management, 12);
+  const suspiciousNetworks = compactList(networkSplit.suspicious, 12);
   const created = compactList(asList(result.files_created, fileEventList(result.file_events, "created")), 12);
   const modified = compactList(asList(result.files_modified, fileEventList(result.file_events, "modified")), 12);
   const risks = compactList(asList(result.risk_observations), 12);
   const stdout = result.stdout ? String(result.stdout).slice(0, 1200) : "";
   const stderr = result.stderr ? String(result.stderr).slice(0, 1200) : "";
   const strace = result.strace_excerpt ? String(result.strace_excerpt).slice(0, 1800) : "";
+  const remediation = state.remediations.find((plan) => sameArtifact(plan, result));
+  const retryUrl = result.alert_id ? `/api/quarantine/${encodeURIComponent(result.alert_id)}/retry` : "";
   const explanation = result._placeholder
     ? "M3 n'a pas encore un resultat confirme dans M4 pour cet artifact_id. Si Asma voit 'deja traite', elle doit supprimer sandbox/processed_artifacts.json ou relancer le worker apres git pull."
     : behaviorText(result);
+  const statusInfo = statusDisplay(status);
 
   panel.innerHTML = `
     <div class="detail-stack">
@@ -686,40 +841,90 @@ function renderSandboxDetail(result) {
         <strong>${escapeHtml(result.artifact_id || result.analysis_id || "sandbox")}</strong>
         <span>${escapeHtml(result.artifact_name || result.filename || "Analyse comportementale")}</span>
       </div>
-      ${detailRow("status", status)}
-      ${detailRow("interpretation", explanation, true)}
+      <section class="m3-summary-card">
+        <header>
+          <span>Resume M3</span>
+          ${statusBadge(status)}
+        </header>
+        <div class="m3-summary-grid">
+          <article><span>VM utilisee</span><strong>${escapeHtml(result.vm_name || result.sandbox_vm || result.sandbox_id || "-")}</strong></article>
+          <article><span>Snapshot</span><strong>${escapeHtml(result.snapshot_name || result.snapshot_used || "-")}</strong></article>
+          <article><span>Execution</span><strong>${escapeHtml(statusInfo.label)}</strong></article>
+          <article><span>Exit code</span><strong>${escapeHtml(valueOrDash(result.exit_code))}</strong></article>
+          <article><span>Fichiers crees</span><strong>${created.length}</strong></article>
+          <article><span>Fichiers modifies</span><strong>${modified.length}</strong></article>
+          <article><span>Connexions suspectes</span><strong>${suspiciousNetworks.length}</strong></article>
+          <article><span>Observation</span><strong>${escapeHtml(explanation.slice(0, 120))}</strong></article>
+        </div>
+      </section>
+      ${detailRow("interpretation", statusInfo.message || explanation, true)}
       ${result.m4_artifact_id && result.local_artifact_id && result.m4_artifact_id !== result.local_artifact_id ? detailRow("m4 artifact", result.m4_artifact_id, true) : ""}
       ${result._linked_by ? detailRow("linked by", result._linked_by) : ""}
-      ${detailRow("vm", result.vm_name || result.sandbox_vm || result.sandbox_id)}
-      ${detailRow("snapshot", result.snapshot_name || result.snapshot_used)}
-      ${detailRow("exit code", valueOrDash(result.exit_code))}
       ${detailRow("started", result.started_at || result.analysis_started_at)}
       ${detailRow("finished", result.finished_at || result.analysis_finished_at || result.received_at)}
       ${detailRow("sha256", result.artifact_sha256, true)}
-      <div class="sandbox-detail-grid">
-        <article><span>processes</span><strong>${processes.length}</strong></article>
-        <article><span>files created</span><strong>${created.length}</strong></article>
-        <article><span>files modified</span><strong>${modified.length}</strong></article>
-        <article><span>network</span><strong>${networks.length}</strong></article>
+      <div class="action-row">
+        ${retryUrl ? `<button class="action-button" type="button" data-post="${retryUrl}">relancer sandbox</button>` : ""}
       </div>
-      ${sandboxListBlock("Risk observations", risks)}
-      ${sandboxListBlock("Network connections", networks)}
-      ${sandboxListBlock("Observed processes", processes)}
-      ${sandboxListBlock("Files created", created)}
-      ${sandboxListBlock("Files modified", modified)}
-      ${stdout ? detailRow("stdout", stdout, true) : ""}
-      ${stderr ? detailRow("stderr", stderr, true) : ""}
-      ${strace ? detailRow("strace excerpt", strace, true) : ""}
-      ${detailRow("logs path", result.logs_path || result.local_result_path, true)}
+      <div class="evidence-tabs" data-tabs>
+        <div class="tab-buttons" role="tablist">
+          ${["resume", "processus", "fichiers", "reseau", "strace", "logs", "remediation"].map((tab, index) => `
+            <button class="tab-button ${index === 0 ? "active" : ""}" type="button" data-tab="${tab}">${tab}</button>
+          `).join("")}
+        </div>
+        <section class="tab-panel active" data-panel="resume">
+          ${sandboxListBlock("Risk observations", risks)}
+          ${detailRow("logs path", result.logs_path || result.local_result_path, true)}
+        </section>
+        <section class="tab-panel" data-panel="processus">
+          ${sandboxListBlock("Observed processes", processes)}
+        </section>
+        <section class="tab-panel" data-panel="fichiers">
+          ${sandboxListBlock("Files created", created)}
+          ${sandboxListBlock("Files modified", modified)}
+        </section>
+        <section class="tab-panel" data-panel="reseau">
+          ${sandboxListBlock("Connexions de gestion sandbox", managementNetworks, "Aucune connexion de gestion observee.")}
+          ${sandboxListBlock("Connexions suspectes de l'artefact", suspiciousNetworks, "Aucune connexion suspecte observee.")}
+        </section>
+        <section class="tab-panel" data-panel="strace">
+          ${strace ? detailRow("strace excerpt", strace, true) : emptyState("Aucun strace", "strace.log")}
+        </section>
+        <section class="tab-panel" data-panel="logs">
+          ${detailRow("stdout.log", result.stdout_path || "stdout.log", true)}
+          ${detailRow("stderr.log", result.stderr_path || "stderr.log", true)}
+          ${detailRow("strace.log", result.strace_path || "strace.log", true)}
+          ${detailRow("result.json", result.logs_path || result.local_result_path || "sandbox_result.json", true)}
+          ${stdout ? detailRow("stdout", stdout, true) : ""}
+          ${stderr ? detailRow("stderr", stderr, true) : ""}
+        </section>
+        <section class="tab-panel" data-panel="remediation">
+          ${remediation ? renderRemediationMini(remediation) : emptyState("Aucune remediation liee", "en attente de M4")}
+        </section>
+      </div>
+    </div>
+  `;
+  bindCopyButtons(panel);
+  bindPostButtons(panel);
+  bindTabs(panel);
+}
+
+function sandboxListBlock(title, items, empty = "Aucun element observe.") {
+  return `
+    <div class="sandbox-list-block">
+      <span>${escapeHtml(title)}</span>
+      ${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(readableEvent(item))}</li>`).join("")}</ul>` : `<p>${escapeHtml(empty)}</p>`}
     </div>
   `;
 }
 
-function sandboxListBlock(title, items) {
+function renderRemediationMini(plan) {
+  const ai = aiRecommendation(plan);
   return `
-    <div class="sandbox-list-block">
-      <span>${escapeHtml(title)}</span>
-      ${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(readableEvent(item))}</li>`).join("")}</ul>` : `<p>Aucun element observe.</p>`}
+    <div class="remediation-mini">
+      ${riskBar(plan.risk_score || ai.risk_score, plan.risk_level || ai.risk_level)}
+      ${detailRow("decision", remediationDecision(plan), true)}
+      ${sandboxListBlock("actions", remediationActions(plan).map((action) => `${action.title}: ${action.body}`), "Aucune action disponible.")}
     </div>
   `;
 }
@@ -753,8 +958,7 @@ function renderIocs() {
       <article class="score-card">
         <span>${escapeHtml(item.artifact_id || item.alert_id || "artifact")}</span>
         <strong>${score}</strong>
-        <div class="score-bar"><span style="width:${Math.max(0, Math.min(score, 100))}%"></span></div>
-        <span class="badge ${severityClass(item.risk_level)}">${escapeHtml(item.risk_level || "UNKNOWN")}</span>
+        ${riskBar(score, item.risk_level)}
       </article>
     `;
   }).join("") || `<div class="empty-state"><strong>Aucun score</strong><span>risk engine</span></div>`;
@@ -789,7 +993,7 @@ function renderRemediation() {
     return `
       <tr data-remediation-index="${index}">
         <td class="mono">${escapeHtml(plan.artifact_id || plan.alert_id || "-")}</td>
-        <td><span class="badge ${severityClass(riskLevel)}">${escapeHtml(riskLevel)}</span></td>
+        <td>${statusBadge(riskLevel)}</td>
         <td>${escapeHtml(remediationDecision(plan) || "-")}</td>
         <td>${escapeHtml(selectedPlaybook(plan) || "-")}</td>
         <td><span class="badge ${validation === "HUMAN" ? "medium" : "ready"}">${validation}</span></td>
@@ -830,13 +1034,13 @@ function renderRemediationDetail(plan) {
       ${detailRow("model", `${model.name || "RDA-Remediation-AI"} ${model.version || ""}`)}
       ${detailRow("external api", model.external_api === true ? "YES" : "NO")}
       ${detailRow("confidence", valueOrDash(ai.confidence))}
-      ${detailRow("risk", `${valueOrDash(plan.risk_level || ai.risk_level)} / ${valueOrDash(plan.risk_score || ai.risk_score)}`)}
+      ${riskBar(plan.risk_score || ai.risk_score, plan.risk_level || ai.risk_level)}
       ${detailRow("decision", remediationDecision(plan), true)}
       ${detailRow("matched signals", matchedSignals || "-", true)}
       <div class="remediation-actions">
         ${actions.map((action) => `
           <article>
-            <span class="badge ${severityClass(action.status)}">${escapeHtml(action.status)}</span>
+            ${statusBadge(action.status)}
             <strong>${escapeHtml(action.title)}</strong>
             <p>${escapeHtml(action.body)}</p>
           </article>
@@ -844,13 +1048,24 @@ function renderRemediationDetail(plan) {
       </div>
     </div>
   `;
+  bindCopyButtons(panel);
 }
 
 function detailRow(label, value, mono = false) {
+  const text = valueOrDash(value);
+  const copyable = mono && text !== "-" && (
+    String(label).toLowerCase().includes("path")
+    || String(label).toLowerCase().includes(".log")
+    || String(label).toLowerCase().includes("result.json")
+    || String(text).includes("/")
+    || String(text).includes("\\")
+  );
+  const copy = copyable ? `<button class="copy-button" type="button" data-copy="${escapeHtml(text)}">copy path</button>` : "";
   return `
     <div class="detail-row">
       <span>${escapeHtml(label)}</span>
-      <strong class="${mono ? "mono" : ""}">${escapeHtml(valueOrDash(value))}</strong>
+      <strong class="${mono ? "mono" : ""}">${escapeHtml(text)}</strong>
+      ${copy}
     </div>
   `;
 }
@@ -863,6 +1078,57 @@ function bindOpenButtons(root = document) {
   root.querySelectorAll("[data-open]").forEach((button) => {
     button.addEventListener("click", () => {
       if (button.dataset.open) window.open(button.dataset.open, "_blank", "noopener");
+    });
+  });
+}
+
+function bindCopyButtons(root = document) {
+  root.querySelectorAll("[data-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const value = button.dataset.copy || "";
+      try {
+        await navigator.clipboard.writeText(value);
+        button.textContent = "copied";
+        window.setTimeout(() => { button.textContent = "copy path"; }, 1200);
+      } catch {
+        button.textContent = "copy failed";
+      }
+    });
+  });
+}
+
+function bindPostButtons(root = document) {
+  root.querySelectorAll("[data-post]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!button.dataset.post) return;
+      button.disabled = true;
+      const oldText = button.textContent;
+      button.textContent = "sending...";
+      try {
+        const response = await fetch(button.dataset.post, { method: "GET", cache: "no-store" });
+        if (!response.ok) throw new Error(String(response.status));
+        button.textContent = "requested";
+        await loadData();
+      } catch {
+        button.textContent = "failed";
+      } finally {
+        window.setTimeout(() => {
+          button.disabled = false;
+          button.textContent = oldText;
+        }, 1400);
+      }
+    });
+  });
+}
+
+function bindTabs(root = document) {
+  root.querySelectorAll("[data-tabs]").forEach((tabs) => {
+    tabs.querySelectorAll("[data-tab]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = button.dataset.tab;
+        tabs.querySelectorAll("[data-tab]").forEach((item) => item.classList.toggle("active", item === button));
+        tabs.querySelectorAll("[data-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === target));
+      });
     });
   });
 }
@@ -1034,6 +1300,20 @@ function bindEvents() {
   $("#global-search").addEventListener("input", (event) => {
     state.query = event.target.value.trim().toLowerCase();
     renderAll();
+  });
+
+  [
+    ["#status-filter", "statusFilter"],
+    ["#risk-filter", "riskFilter"],
+    ["#member-filter", "memberFilter"],
+    ["#type-filter", "typeFilter"]
+  ].forEach(([selector, key]) => {
+    const field = $(selector);
+    if (!field) return;
+    field.addEventListener("change", (event) => {
+      state[key] = event.target.value;
+      renderAll();
+    });
   });
 
   $("#refresh-data").addEventListener("click", loadData);

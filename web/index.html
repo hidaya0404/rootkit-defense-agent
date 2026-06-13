@@ -89,6 +89,48 @@
               <span>FILTER</span>
               <input id="global-search" type="search" placeholder="grep alert_id hash path ioc">
             </label>
+            <div class="filter-strip" aria-label="Filtres rapides">
+              <label>
+                <span>STATUS</span>
+                <select id="status-filter">
+                  <option value="ALL">ALL</option>
+                  <option value="READY">READY</option>
+                  <option value="WAITING">WAITING</option>
+                  <option value="COMPLETED">COMPLETED</option>
+                  <option value="FAILED">FAILED</option>
+                </select>
+              </label>
+              <label>
+                <span>RISK</span>
+                <select id="risk-filter">
+                  <option value="ALL">ALL</option>
+                  <option value="CRITICAL">CRITICAL</option>
+                  <option value="HIGH">HIGH</option>
+                  <option value="MEDIUM">MEDIUM</option>
+                  <option value="LOW">LOW</option>
+                </select>
+              </label>
+              <label>
+                <span>MEMBER</span>
+                <select id="member-filter">
+                  <option value="ALL">ALL</option>
+                  <option value="M1">M1</option>
+                  <option value="M2">M2</option>
+                  <option value="M3">M3</option>
+                  <option value="M4">M4</option>
+                </select>
+              </label>
+              <label>
+                <span>TYPE</span>
+                <select id="type-filter">
+                  <option value="ALL">ALL</option>
+                  <option value=".sh">.sh</option>
+                  <option value=".ko">.ko</option>
+                  <option value=".service">.service</option>
+                  <option value="json">json</option>
+                </select>
+              </label>
+            </div>
             <button class="icon-button" id="refresh-data" type="button" aria-label="Rafraichir">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M20 12a8 8 0 0 1-14.2 5M4 12A8 8 0 0 1 18.2 7M18 3v4h-4M6 21v-4h4"/>
